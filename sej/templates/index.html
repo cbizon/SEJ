@@ -85,13 +85,49 @@
         fetch("/api/data")
             .then(r => r.json())
             .then(({columns, data}) => {
-                const colDefs = columns.map(name => ({
-                    title: name,
-                    field: name,
-                    headerFilter: "input",
-                    sorter: monthPattern.test(name) ? monthSorter : "string",
-                    visible: !hiddenByDefault.has(name) && !isPastMonth(name),
-                }));
+                // Compute per-employee per-month sums to find violations (should be 100).
+                const monthFields = columns.filter(name => monthPattern.test(name));
+                const violations = new Set();
+                if (monthFields.length > 0) {
+                    const sums = {};
+                    data.forEach(row => {
+                        const emp = row["Employee"];
+                        if (!sums[emp]) sums[emp] = {};
+                        monthFields.forEach(mf => {
+                            const val = row[mf];
+                            const pct = (val !== "" && val != null) ? parseFloat(val) : 0;
+                            sums[emp][mf] = (sums[emp][mf] || 0) + (isNaN(pct) ? 0 : pct);
+                        });
+                    });
+                    Object.entries(sums).forEach(([emp, monthSums]) => {
+                        monthFields.forEach(mf => {
+                            if (Math.abs((monthSums[mf] || 0) - 100) > 0.01) {
+                                violations.add(`${emp}|${mf}`);
+                            }
+                        });
+                    });
+                }
+
+                const colDefs = columns.map(name => {
+                    const isMonth = monthPattern.test(name);
+                    const def = {
+                        title: name,
+                        field: name,
+                        headerFilter: "input",
+                        sorter: isMonth ? monthSorter : "string",
+                        visible: !hiddenByDefault.has(name) && !isPastMonth(name),
+                    };
+                    if (isMonth) {
+                        def.formatter = (cell) => {
+                            const emp = cell.getRow().getData()["Employee"];
+                            if (violations.has(`${emp}|${name}`)) {
+                                cell.getElement().style.backgroundColor = "#ffcccc";
+                            }
+                            return cell.getValue() ?? "";
+                        };
+                    }
+                    return def;
+                });
 
                 const table = new Tabulator("#table", {
                     data: data,
