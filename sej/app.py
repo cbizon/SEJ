@@ -33,6 +33,9 @@ def main():
     import sys
     from sej.db import get_connection
 
+    # Expect at most one optional positional argument: DB_PATH
+    if len(sys.argv) > 2:
+        sys.exit("Usage: sej-web [DB_PATH]")
     db_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("IET_2_8_26_anon.db")
 
     if not db_path.exists():
