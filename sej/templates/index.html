@@ -3,6 +3,7 @@
 <head>
     <meta charset="utf-8">
     <title>SEJ - Effort Allocations</title>
+    <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator.min.css" rel="stylesheet">
     <style>
         body {
             font-family: "Segoe UI", Arial, sans-serif;
@@ -10,51 +11,134 @@
             background: #f8f9fa;
         }
         h1 { margin-bottom: 0.5rem; }
-        table {
-            border-collapse: collapse;
-            width: 100%;
+        #toolbar { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
+        #col-picker { position: relative; display: inline-block; }
+        #col-dropdown {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
             background: #fff;
-            font-size: 0.85rem;
-        }
-        th, td {
             border: 1px solid #ccc;
-            padding: 4px 8px;
-            text-align: left;
-            white-space: nowrap;
+            padding: 8px 12px;
+            z-index: 100;
+            min-width: 180px;
+            max-height: 400px;
+            overflow-y: auto;
+            box-shadow: 2px 2px 6px rgba(0,0,0,0.2);
         }
-        thead th {
-            background: #343a40;
-            color: #fff;
-            position: sticky;
-            top: 0;
-            z-index: 1;
-        }
-        tbody tr:nth-child(even) { background: #f2f2f2; }
-        tbody tr:hover { background: #e2e6ea; }
-        tr.employee-start td { font-weight: bold; }
+        #col-dropdown.open { display: block; }
+        #col-dropdown label { display: block; cursor: pointer; padding: 3px 0; white-space: nowrap; }
+        button { cursor: pointer; padding: 4px 10px; }
+        #show-all-btn.active { background: #0d6efd; color: #fff; border-color: #0d6efd; }
     </style>
 </head>
 <body>
     <h1>Effort Allocations</h1>
-    <div style="overflow-x: auto;">
-        <table>
-            <thead>
-                <tr>
-                    {% for header in headers %}
-                    <th>{{ header }}</th>
-                    {% endfor %}
-                </tr>
-            </thead>
-            <tbody>
-                {% for row in rows %}
-                <tr{% if row[0] %} class="employee-start"{% endif %}>
-                    {% for cell in row %}
-                    <td>{{ cell }}</td>
-                    {% endfor %}
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <div id="toolbar">
+        <div id="col-picker">
+            <button id="col-btn">Columns &#9660;</button>
+            <div id="col-dropdown"></div>
+        </div>
+        <button id="show-all-btn">Show all rows</button>
     </div>
+    <div id="table"></div>
+
+    <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+    <script>
+        const monthPattern = /January|February|March|April|May|June|July|August|September|October|November|December/;
+        const hiddenByDefault = new Set([
+            "Fund Code", "Source", "Account",
+            "Cost Code 1", "Cost Code 2", "Cost Code 3", "Program Code",
+        ]);
+
+        function monthSorter(a, b) {
+            const parse = v => (v === "" || v == null) ? -Infinity : parseFloat(v);
+            return parse(a) - parse(b);
+        }
+
+        function isPastMonth(name) {
+            if (!monthPattern.test(name)) return false;
+            const d = new Date(name + " 1");
+            const now = new Date();
+            return d.getFullYear() < now.getFullYear() ||
+                   (d.getFullYear() === now.getFullYear() && d.getMonth() < now.getMonth());
+        }
+
+        let showAllRows = false;
+
+        function applyRowFilter(table) {
+            if (showAllRows) {
+                table.clearFilter(true);
+                return;
+            }
+            const visibleMonthFields = table.getColumns()
+                .filter(c => c.isVisible() && monthPattern.test(c.getField()))
+                .map(c => c.getField());
+            if (visibleMonthFields.length === 0) {
+                table.clearFilter(true);
+                return;
+            }
+            table.setFilter(row => visibleMonthFields.some(f => row[f] !== "" && row[f] != null));
+        }
+
+        fetch("/api/data")
+            .then(r => r.json())
+            .then(({columns, data}) => {
+                const colDefs = columns.map(name => ({
+                    title: name,
+                    field: name,
+                    headerFilter: "input",
+                    sorter: monthPattern.test(name) ? monthSorter : "string",
+                    visible: !hiddenByDefault.has(name) && !isPastMonth(name),
+                }));
+
+                const table = new Tabulator("#table", {
+                    data: data,
+                    columns: colDefs,
+                    layout: "fitDataFill",
+                    height: "85vh",
+                    initialSort: [
+                        {column: "Group", dir: "asc"},
+                        {column: "Employee", dir: "asc"},
+                    ],
+                });
+
+                const btn = document.getElementById("col-btn");
+                const dropdown = document.getElementById("col-dropdown");
+                const showAllBtn = document.getElementById("show-all-btn");
+
+                table.on("tableBuilt", () => {
+                    applyRowFilter(table);
+
+                    table.getColumns().forEach(col => {
+                        const label = document.createElement("label");
+                        const cb = document.createElement("input");
+                        cb.type = "checkbox";
+                        cb.checked = col.isVisible();
+                        cb.addEventListener("change", () => col.toggle());
+                        label.appendChild(cb);
+                        label.appendChild(document.createTextNode("\u00a0" + col.getDefinition().title));
+                        dropdown.appendChild(label);
+                    });
+                });
+
+                table.on("columnVisibilityChanged", () => applyRowFilter(table));
+
+                showAllBtn.addEventListener("click", () => {
+                    showAllRows = !showAllRows;
+                    showAllBtn.classList.toggle("active", showAllRows);
+                    applyRowFilter(table);
+                });
+
+                btn.addEventListener("click", e => {
+                    e.stopPropagation();
+                    dropdown.classList.toggle("open");
+                });
+
+                dropdown.addEventListener("click", e => e.stopPropagation());
+                document.addEventListener("click", () => dropdown.classList.remove("open"));
+            });
+    </script>
 </body>
 </html>

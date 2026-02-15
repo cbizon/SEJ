@@ -14,10 +14,8 @@ uv sync
 
 The database is populated from a TSV file exported from the effort-tracking spreadsheet.
 
-```python
-from sej.importer import load_tsv
-
-load_tsv("path/to/data_anon.tsv", "sej.db")
+```
+uv run sej-load IET_2_8_26_anon.tsv IET_2_8_26_anon.db
 ```
 
 This wipes any existing data and reloads from the given file. The database file is created if it does not exist.

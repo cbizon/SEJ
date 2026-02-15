@@ -106,7 +106,8 @@ def load_tsv(tsv_path: str | Path, db_path: str | Path) -> None:
             if not project_code or "N/A" in project_code:
                 project_code = NON_PROJECT_CODE
 
-            project_name = row["Project Name"].strip() or None
+            raw_project_name = row["Project Name"].strip()
+            project_name = NON_PROJECT_CODE if not raw_project_name or "N/A" in raw_project_name else raw_project_name
             existing = conn.execute(
                 "SELECT id, name FROM projects WHERE project_code = ?",
                 (project_code,),
@@ -152,7 +153,7 @@ def load_tsv(tsv_path: str | Path, db_path: str | Path) -> None:
             # Insert effort rows for each month that has a value
             for col in month_cols:
                 pct = _parse_percentage(row[col])
-                if pct is None:
+                if not pct:
                     continue
                 year, month = _parse_month_column(col)
                 conn.execute(
@@ -162,3 +163,15 @@ def load_tsv(tsv_path: str | Path, db_path: str | Path) -> None:
 
     conn.commit()
     conn.close()
+
+
+def main():
+    """CLI entry point: ``sej-load TSV_PATH [DB_PATH]``."""
+    import sys
+
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        sys.exit("Usage: sej-load TSV_PATH [DB_PATH]")
+    tsv_path = Path(sys.argv[1])
+    db_path = Path(sys.argv[2]) if len(sys.argv) == 3 else tsv_path.with_suffix(".db")
+    load_tsv(tsv_path, db_path)
+    print(f"Loaded {tsv_path} → {db_path}")

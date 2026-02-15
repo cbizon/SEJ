@@ -57,36 +57,44 @@ def test_index_returns_200(client):
     assert resp.status_code == 200
 
 
+def test_api_data_returns_200(client):
+    resp = client.get("/api/data")
+    assert resp.status_code == 200
+
+
 def test_index_contains_column_headers(client):
-    html = client.get("/").data.decode()
+    payload = client.get("/api/data").json
+    cols = payload["columns"]
     for header in ["Employee", "Group", "Fund Code", "Project Id",
-                    "Project Name", "July 2025", "August 2025"]:
-        assert header in html
+                   "Project Name", "July 2025", "August 2025"]:
+        assert header in cols
 
 
 def test_index_contains_employee_names(client):
-    html = client.get("/").data.decode()
-    assert "Smith,Jane" in html
-    assert "Jones,Bob" in html
+    payload = client.get("/api/data").json
+    employees = [row["Employee"] for row in payload["data"]]
+    assert "Smith,Jane" in employees
+    assert "Jones,Bob" in employees
 
 
 def test_index_contains_percentages(client):
-    html = client.get("/").data.decode()
-    assert "50.00%" in html
-    assert "100.00%" in html
+    payload = client.get("/api/data").json
+    all_values = [v for row in payload["data"] for v in row.values()]
+    assert "50.00%" in all_values
+    assert "100.00%" in all_values
 
 
-def test_non_project_shows_na(client):
-    html = client.get("/").data.decode()
-    assert "N/A" in html
+def test_non_project_shows_non_project(client):
+    payload = client.get("/api/data").json
+    project_ids = [row["Project Id"] for row in payload["data"]]
+    assert "Non-Project" in project_ids
 
 
-def test_continuation_row_blanks_employee(client):
-    """The second allocation line for Smith,Jane should not repeat the name."""
-    html = client.get("/").data.decode()
-    # Smith,Jane should appear exactly once in the table body
-    # (the header row doesn't contain it, so count in the whole page)
-    assert html.count("Smith,Jane") == 1
+def test_continuation_row_carries_employee_name(client):
+    """Every allocation line carries the full employee name (no blanking)."""
+    payload = client.get("/api/data").json
+    smith_rows = [r for r in payload["data"] if r["Employee"] == "Smith,Jane"]
+    assert len(smith_rows) == 2
 
 
 def test_main_exits_on_missing_db(tmp_path, monkeypatch):
