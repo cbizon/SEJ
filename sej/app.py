@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from flask import Flask, render_template
+from flask import Flask, jsonify, render_template
 
 from sej.queries import get_spreadsheet_rows
 
@@ -22,8 +22,13 @@ def create_app(db_path=None):
 
     @app.route("/")
     def index():
+        return render_template("index.html")
+
+    @app.route("/api/data")
+    def api_data():
         headers, rows = get_spreadsheet_rows(app.config["DB_PATH"])
-        return render_template("index.html", headers=headers, rows=rows)
+        data = [dict(zip(headers, row)) for row in rows]
+        return jsonify({"columns": headers, "data": data})
 
     return app
 

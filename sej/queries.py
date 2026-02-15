@@ -4,7 +4,6 @@ import sqlite3
 from pathlib import Path
 
 from sej.db import get_connection
-from sej.importer import NON_PROJECT_CODE
 
 
 def _discover_months(conn: sqlite3.Connection) -> list[tuple[int, int]]:
@@ -79,18 +78,13 @@ def get_spreadsheet_rows(db_path: str | Path) -> tuple[list[str], list[list[str]
     ] + [_month_label(y, m) for y, m in months]
 
     result = []
-    prev_employee = None
     for row in rows:
         employee = row["employee_name"]
-        show_employee = "" if employee == prev_employee else employee
-        prev_employee = employee
 
         project_code = row["project_code"]
-        if project_code == NON_PROJECT_CODE:
-            project_code = "N/A"
 
         line = [
-            show_employee,
+            employee,
             row["group_name"],
             row["fund_code"] or "",
             row["source"] or "",

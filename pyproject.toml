@@ -9,6 +9,7 @@ dependencies = [
 
 [project.scripts]
 sej-web = "sej.app:main"
+sej-load = "sej.importer:main"
 
 [build-system]
 requires = ["hatchling"]
