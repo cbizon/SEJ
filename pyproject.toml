@@ -3,7 +3,16 @@ name = "sej"
 version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "flask>=3.0",
+]
+
+[project.scripts]
+sej-web = "sej.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [

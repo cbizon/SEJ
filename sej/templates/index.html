@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>SEJ - Effort Allocations</title>
+    <style>
+        body {
+            font-family: "Segoe UI", Arial, sans-serif;
+            margin: 1rem;
+            background: #f8f9fa;
+        }
+        h1 { margin-bottom: 0.5rem; }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            background: #fff;
+            font-size: 0.85rem;
+        }
+        th, td {
+            border: 1px solid #ccc;
+            padding: 4px 8px;
+            text-align: left;
+            white-space: nowrap;
+        }
+        thead th {
+            background: #343a40;
+            color: #fff;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+        tbody tr:nth-child(even) { background: #f2f2f2; }
+        tbody tr:hover { background: #e2e6ea; }
+        tr.employee-start td { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Effort Allocations</h1>
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    {% for header in headers %}
+                    <th>{{ header }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr{% if row[0] %} class="employee-start"{% endif %}>
+                    {% for cell in row %}
+                    <td>{{ cell }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
