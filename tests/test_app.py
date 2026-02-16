@@ -829,3 +829,48 @@ def test_serve_merge_tsv_not_found(main_client):
 def test_serve_merge_tsv_path_traversal(main_client):
     resp = main_client.get("/merges/../sej.db")
     assert resp.status_code == 404
+
+
+# --- Reports pages ---
+
+def test_reports_page_returns_200(main_client):
+    resp = main_client.get("/reports")
+    assert resp.status_code == 200
+
+
+def test_report_nonproject_by_group_page_returns_200(main_client):
+    resp = main_client.get("/reports/nonproject-by-group")
+    assert resp.status_code == 200
+
+
+def test_api_nonproject_by_group_structure(main_client):
+    resp = main_client.get("/api/nonproject-by-group")
+    assert resp.status_code == 200
+    data = resp.json
+    assert "months" in data
+    assert "rows" in data
+    assert isinstance(data["months"], list)
+    assert isinstance(data["rows"], list)
+
+
+def test_api_nonproject_by_group_contains_groups(main_client):
+    data = main_client.get("/api/nonproject-by-group").json
+    groups = [r["group"] for r in data["rows"]]
+    assert "Engineering" in groups
+    assert "Ops" in groups
+
+
+def test_api_nonproject_by_group_percentages(main_client):
+    data = main_client.get("/api/nonproject-by-group").json
+    # Jones,Bob (Ops) is 100% Non-Project every month, so Ops should be 100%
+    ops_row = next(r for r in data["rows"] if r["group"] == "Ops")
+    for month in data["months"]:
+        assert abs(ops_row[month] - 100.0) < 0.1, f"Ops {month}: expected 100%, got {ops_row[month]}"
+
+
+def test_api_nonproject_by_group_engineering_partial(main_client):
+    # Smith,Jane (Engineering) has 50%+50%=100% total, none on Non-Project
+    data = main_client.get("/api/nonproject-by-group").json
+    eng_row = next(r for r in data["rows"] if r["group"] == "Engineering")
+    for month in data["months"]:
+        assert eng_row[month] == 0.0, f"Engineering {month}: expected 0%, got {eng_row[month]}"

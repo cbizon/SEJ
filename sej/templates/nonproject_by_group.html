@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>SEJ - Non-Project by Group</title>
+    <style>
+        body {
+            font-family: "Segoe UI", Arial, sans-serif;
+            margin: 1rem;
+            background: #f8f9fa;
+        }
+        h1 { margin-bottom: 0.25rem; }
+        nav { margin-bottom: 1rem; }
+        nav a { margin-right: 1rem; text-decoration: none; color: #0d6efd; }
+        nav a:hover { text-decoration: underline; }
+        p.subtitle { color: #555; margin: 0 0 1rem; font-size: 0.95em; }
+        table {
+            border-collapse: collapse;
+            background: #fff;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+        }
+        th {
+            background: #343a40;
+            color: #fff;
+            padding: 8px 14px;
+            text-align: right;
+            white-space: nowrap;
+            font-size: 0.88em;
+        }
+        th:first-child { text-align: left; }
+        td {
+            padding: 7px 14px;
+            border-bottom: 1px solid #dee2e6;
+            text-align: right;
+            white-space: nowrap;
+            font-size: 0.9em;
+        }
+        td:first-child { text-align: left; font-weight: 600; }
+        tr:last-child td { border-bottom: none; }
+        tr:hover td { background: #f1f3f5; }
+        .loading { color: #6c757d; font-style: italic; }
+    </style>
+</head>
+<body>
+    <h1>Non-Project by Group</h1>
+    <nav>
+        <a href="/reports">&larr; Reports</a>
+    </nav>
+    <p class="subtitle">
+        Percentage of each group's total recorded effort that goes to Non-Project (overhead/admin) work, by month.
+    </p>
+
+    <div id="content"><span class="loading">Loading&hellip;</span></div>
+
+    <script>
+        function fmt(pct) {
+            if (pct == null) return "";
+            return pct.toFixed(1) + "%";
+        }
+
+        fetch("/api/nonproject-by-group")
+            .then(r => r.json())
+            .then(({months, rows}) => {
+                const content = document.getElementById("content");
+                if (!rows.length) {
+                    content.innerHTML = '<p style="color:#6c757d;font-style:italic">No data found.</p>';
+                    return;
+                }
+
+                const headerCells = ['<th>Group</th>']
+                    .concat(months.map(m => `<th>${m}</th>`))
+                    .join("");
+
+                const bodyRows = rows.map(row => {
+                    const cells = [`<td>${row.group}</td>`]
+                        .concat(months.map(m => `<td>${fmt(row[m])}</td>`))
+                        .join("");
+                    return `<tr>${cells}</tr>`;
+                }).join("");
+
+                content.innerHTML = `
+                    <table>
+                        <thead><tr>${headerCells}</tr></thead>
+                        <tbody>${bodyRows}</tbody>
+                    </table>`;
+            });
+    </script>
+</body>
+</html>

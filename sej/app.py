@@ -16,6 +16,7 @@ from sej.queries import (
     add_allocation_line,
     fix_totals,
     get_audit_log,
+    get_nonproject_by_group,
 )
 
 
@@ -169,6 +170,19 @@ def create_app(db_path=None):
         branch_name = branches[0]["name"]
         delete_branch(main, branch_name)
         return jsonify({"discarded": branch_name})
+
+    @app.route("/reports")
+    def reports():
+        return render_template("reports.html")
+
+    @app.route("/reports/nonproject-by-group")
+    def report_nonproject_by_group():
+        return render_template("nonproject_by_group.html")
+
+    @app.route("/api/nonproject-by-group")
+    def api_nonproject_by_group():
+        main = app.config["MAIN_DB_PATH"]
+        return jsonify(get_nonproject_by_group(main))
 
     @app.route("/history")
     def history():

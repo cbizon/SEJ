@@ -406,6 +406,55 @@ def add_allocation_line(db_path: str | Path, employee_name: str,
     return line_id
 
 
+def get_nonproject_by_group(db_path: str | Path) -> dict:
+    """Return Non-Project effort as a percentage of total effort, by group and month.
+
+    Returns a dict with:
+        months: list of month label strings in chronological order
+        rows:   list of {group, <month_label>: pct, ...} dicts, sorted by group name
+    """
+    conn = get_connection(db_path)
+    create_schema(conn)
+    months = _discover_months(conn)
+
+    rows = conn.execute("""
+        SELECT
+            g.name AS group_name,
+            e.year,
+            e.month,
+            SUM(CASE WHEN p.project_code = 'Non-Project' THEN e.percentage ELSE 0 END) AS np_effort,
+            SUM(e.percentage) AS total_effort
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN employees emp ON emp.id = al.employee_id
+        JOIN groups g ON g.id = emp.group_id
+        JOIN projects p ON p.id = al.project_id
+        GROUP BY g.id, e.year, e.month
+        ORDER BY g.name, e.year, e.month
+    """).fetchall()
+    conn.close()
+
+    month_labels = [_month_label(y, m) for y, m in months]
+
+    # Build a lookup: group_name -> month_label -> pct
+    data: dict[str, dict[str, float]] = {}
+    for r in rows:
+        g = r["group_name"]
+        label = _month_label(r["year"], r["month"])
+        total = r["total_effort"]
+        pct = (r["np_effort"] / total * 100.0) if total else 0.0
+        data.setdefault(g, {})[label] = pct
+
+    result_rows = []
+    for g in sorted(data.keys()):
+        row: dict = {"group": g}
+        for label in month_labels:
+            row[label] = round(data[g].get(label, 0.0), 1)
+        result_rows.append(row)
+
+    return {"months": month_labels, "rows": result_rows}
+
+
 def get_audit_log(db_path: str | Path) -> list[dict]:
     """Return audit log entries, most recent first.
 
