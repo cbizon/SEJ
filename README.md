@@ -15,10 +15,16 @@ uv sync
 The database is populated from a TSV file exported from the effort-tracking spreadsheet.
 
 ```
-uv run sej-load data.tsv sej.db
+uv run sej-load IET_2_8_26_anon.tsv
 ```
 
-The first load creates the database directly. Subsequent loads create a **branch** that can be reviewed and merged (see [Branching](#branching) below).
+This creates `data/sej.db`. The first load creates the database directly. Subsequent loads create a **branch** that can be reviewed and merged (see [Branching](#branching) below).
+
+You can specify an explicit output path as a second argument:
+
+```
+uv run sej-load mydata.tsv path/to/custom.db
+```
 
 **Input file requirements:**
 
@@ -31,10 +37,16 @@ The first load creates the database directly. Subsequent loads create a **branch
 A Flask web app displays the effort data in a spreadsheet-style table.
 
 ```bash
-uv run sej-web sej.db
+uv run sej-web
 ```
 
-Then open http://127.0.0.1:5000 in your browser. The database path argument is optional and defaults to `IET_2_8_26_anon.db`.
+The database path argument is optional and defaults to `data/sej.db`. To use a different path:
+
+```bash
+uv run sej-web path/to/custom.db
+```
+
+Then open http://127.0.0.1:5000 in your browser.
 
 When viewing a **branch** database, the app enters edit mode:
 
@@ -52,38 +64,34 @@ All changes go through branches. A branch is a full copy of the main database th
 ### Create a branch
 
 ```bash
-uv run sej-branch create my-edits --from-db sej.db
+uv run sej-branch create my-edits
 ```
 
-This copies `sej.db` to `sej_branch_my-edits.db`. Open the branch in the web app to edit:
-
-```bash
-uv run sej-web sej_branch_my-edits.db
-```
+This copies `data/sej.db` to `data/sej_branch_my-edits.db`. The web app picks up the branch automatically — just refresh.
 
 ### List branches
 
 ```bash
-uv run sej-branch list --db sej.db
+uv run sej-branch list
 ```
 
 ### Merge a branch
 
 ```bash
-uv run sej-branch merge my-edits --db sej.db
+uv run sej-branch merge my-edits
 ```
 
 This:
 1. Computes a diff between the branch and main
-2. Writes a change-log TSV (`merge_my-edits_<timestamp>.tsv`)
-3. Backs up the current main (`sej_backup_<timestamp>.db`)
+2. Writes a change-log TSV (`data/merges/merge_my-edits_<timestamp>.tsv`)
+3. Backs up the current main (`data/backups/sej_backup_<timestamp>.db`)
 4. Replaces main with the branch
 5. Records the merge in the audit log
 
 ### Delete a branch (without merging)
 
 ```bash
-uv run sej-branch delete my-edits --db sej.db
+uv run sej-branch delete my-edits
 ```
 
 ### Revert to a previous main
@@ -92,16 +100,16 @@ Every merge creates a backup. To roll back:
 
 ```bash
 # Revert to the most recent backup
-uv run sej-branch revert --db sej.db
+uv run sej-branch revert
 
 # Revert to a specific backup
-uv run sej-branch revert sej_backup_20260215_143000_123456.db --db sej.db
+uv run sej-branch revert data/backups/sej_backup_20260215_143000_123456.db
 ```
 
 ### List available backups
 
 ```bash
-uv run sej-branch backups --db sej.db
+uv run sej-branch backups
 ```
 
 Backups are listed most-recent-first.
@@ -110,10 +118,10 @@ Backups are listed most-recent-first.
 
 ```bash
 # Keep only the 5 most recent (default)
-uv run sej-branch prune-backups --db sej.db
+uv run sej-branch prune-backups
 
 # Keep only the 2 most recent
-uv run sej-branch prune-backups --keep 2 --db sej.db
+uv run sej-branch prune-backups --keep 2
 ```
 
 ## Running Tests

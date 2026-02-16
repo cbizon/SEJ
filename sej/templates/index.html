@@ -41,6 +41,10 @@
         button { cursor: pointer; padding: 4px 10px; }
         #show-all-btn.active { background: #0d6efd; color: #fff; border-color: #0d6efd; }
         #select-mode-btn.active { background: #198754; color: #fff; border-color: #198754; }
+        #edit-data-btn { background: #0d6efd; color: #fff; border: 1px solid #0d6efd; }
+        #save-btn { background: #198754; color: #fff; border: 1px solid #198754; }
+        #discard-btn { background: #dc3545; color: #fff; border: 1px solid #dc3545; }
+        #fix-totals-btn { background: #fd7e14; color: #fff; border: 1px solid #fd7e14; }
         .cell-selected { outline: 2px solid #198754 !important; outline-offset: -2px; }
         #selection-toolbar {
             display: none;
@@ -94,8 +98,12 @@
             <div id="col-dropdown"></div>
         </div>
         <button id="show-all-btn">Show all rows</button>
+        <button id="edit-data-btn" style="display:none">Edit data</button>
         <button id="select-mode-btn" style="display:none">Selection mode</button>
+        <button id="fix-totals-btn" style="display:none">Fix totals</button>
         <button id="add-row-btn" style="display:none">Add allocation line</button>
+        <button id="save-btn" style="display:none">Save changes</button>
+        <button id="discard-btn" style="display:none">Discard changes</button>
     </div>
     <div id="table"></div>
 
@@ -207,13 +215,18 @@
         fetch("/api/data")
             .then(r => r.json())
             .then(({columns, data, editable, branch_name}) => {
-                // Show branch banner
+                // Show branch banner and edit-mode buttons
                 if (editable && branch_name) {
                     const banner = document.getElementById("branch-banner");
                     banner.textContent = `Editing branch: ${branch_name}`;
                     banner.style.display = "block";
                     document.getElementById("select-mode-btn").style.display = "";
+                    document.getElementById("fix-totals-btn").style.display = "";
                     document.getElementById("add-row-btn").style.display = "";
+                    document.getElementById("save-btn").style.display = "";
+                    document.getElementById("discard-btn").style.display = "";
+                } else {
+                    document.getElementById("edit-data-btn").style.display = "";
                 }
 
                 const monthFields = columns.filter(name => monthPattern.test(name));
@@ -233,11 +246,21 @@
                             def.editor = "input";
                         }
                         def.formatter = (cell) => {
-                            const emp = cell.getRow().getData()["Employee"];
+                            const rowData = cell.getRow().getData();
+                            const emp = rowData["Employee"];
+                            const lineId = rowData["allocation_line_id"];
+                            const key = `${lineId}|${name}`;
+                            const el = cell.getElement();
                             if (violations.has(`${emp}|${name}`)) {
-                                cell.getElement().style.backgroundColor = "#ffcccc";
+                                el.style.backgroundColor = "#ffcccc";
                             } else {
-                                cell.getElement().style.backgroundColor = "";
+                                el.style.backgroundColor = "";
+                            }
+                            if (selectedCells.has(key)) {
+                                el.classList.add("cell-selected");
+                                selectedElements.set(key, el);
+                            } else {
+                                el.classList.remove("cell-selected");
                             }
                             return cell.getValue() ?? "";
                         };
@@ -275,6 +298,25 @@
                         {column: "Group", dir: "asc"},
                         {column: "Employee", dir: "asc"},
                     ],
+                });
+
+                function applyGroupBorders() {
+                    const sorters = table.getSorters();
+                    const primaryField = sorters.length > 0 ? sorters[0].field : null;
+                    const rows = table.getRows("active");
+                    rows.forEach((row, i) => {
+                        const el = row.getElement();
+                        if (!el) return;
+                        el.style.borderTop = (primaryField && i > 0 &&
+                            row.getData()[primaryField] !== rows[i - 1].getData()[primaryField])
+                            ? "2px solid #888" : "";
+                    });
+                }
+
+                table.on("renderComplete", applyGroupBorders);
+
+                table.on("cellEditing", (cell) => {
+                    if (selectMode) cell.cancelEdit();
                 });
 
                 const btn = document.getElementById("col-btn");
@@ -362,6 +404,17 @@
                     showAllRows = !showAllRows;
                     showAllBtn.classList.toggle("active", showAllRows);
                     applyRowFilter(table);
+                });
+
+                // Fix totals
+                document.getElementById("fix-totals-btn").addEventListener("click", () => {
+                    fetch("/api/fix-totals", { method: "POST" })
+                        .then(r => r.json())
+                        .then(data => {
+                            const n = data.changes ? data.changes.length : 0;
+                            alert(`Fixed ${n} cell${n === 1 ? "" : "s"}.`);
+                            window.location.reload();
+                        });
                 });
 
                 // Selection mode
@@ -492,6 +545,35 @@
 
                 dropdown.addEventListener("click", e => e.stopPropagation());
                 document.addEventListener("click", () => dropdown.classList.remove("open"));
+
+                // Edit / Save / Discard handlers
+                document.getElementById("edit-data-btn").addEventListener("click", () => {
+                    fetch("/api/branch/create", { method: "POST" })
+                        .then(r => {
+                            if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
+                            return r.json();
+                        })
+                        .then(() => location.reload());
+                });
+
+                document.getElementById("save-btn").addEventListener("click", () => {
+                    fetch("/api/branch/merge", { method: "POST" })
+                        .then(r => {
+                            if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
+                            return r.json();
+                        })
+                        .then(() => location.reload());
+                });
+
+                document.getElementById("discard-btn").addEventListener("click", () => {
+                    if (!confirm("Discard all changes? This cannot be undone.")) return;
+                    fetch("/api/branch/discard", { method: "POST" })
+                        .then(r => {
+                            if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
+                            return r.json();
+                        })
+                        .then(() => location.reload());
+                });
             });
     </script>
 </body>

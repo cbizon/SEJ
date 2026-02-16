@@ -243,6 +243,132 @@ def update_effort(db_path: str | Path, allocation_line_id: int,
     conn.close()
 
 
+def fix_totals(db_path: str | Path) -> list[dict]:
+    """Adjust each employee's Non-Project effort so monthly totals sum to 100%.
+
+    Under 100: add the shortfall to the preferred Non-Project line (fund_code
+    '20152'), creating one if needed.
+
+    Over 100: reduce Non-Project lines until the total reaches 100, starting
+    with the preferred line.  If all NP effort is zeroed and it's still over
+    100, stop — can't fix it.
+
+    Returns a list of dicts describing each change:
+    {allocation_line_id, year, month, old_percentage, new_percentage}.
+    """
+    conn = get_connection(db_path)
+    months = _discover_months(conn)
+
+    # Collect ALL Non-Project lines per employee, preferred first.
+    np_rows = conn.execute("""
+        SELECT al.employee_id, al.id AS line_id
+        FROM allocation_lines al
+        JOIN projects p ON p.id = al.project_id
+        WHERE p.project_code = 'Non-Project'
+        ORDER BY al.employee_id,
+                 CASE WHEN al.fund_code = '20152' THEN 0 ELSE 1 END,
+                 al.id
+    """).fetchall()
+
+    np_lines_for_emp = {}
+    for row in np_rows:
+        emp_id = row["employee_id"]
+        np_lines_for_emp.setdefault(emp_id, []).append(row["line_id"])
+
+    changes = []
+    for year, month in months:
+        emp_totals = conn.execute("""
+            SELECT al.employee_id, SUM(e.percentage) AS total
+            FROM efforts e
+            JOIN allocation_lines al ON al.id = e.allocation_line_id
+            WHERE e.year = ? AND e.month = ?
+            GROUP BY al.employee_id
+        """, (year, month)).fetchall()
+
+        for row in emp_totals:
+            emp_id = row["employee_id"]
+            total = row["total"]
+
+            if abs(total - 100) <= 0.01:
+                continue
+
+            diff = 100.0 - total  # positive = under, negative = over
+
+            all_np_lines = np_lines_for_emp.get(emp_id, [])
+
+            if diff > 0:
+                # Under 100 — add shortfall to the preferred NP line.
+                if not all_np_lines:
+                    np_project = conn.execute(
+                        "SELECT id FROM projects WHERE project_code = 'Non-Project'"
+                    ).fetchone()
+                    if np_project is None:
+                        continue
+                    cur = conn.execute(
+                        "INSERT INTO allocation_lines (employee_id, project_id)"
+                        " VALUES (?, ?)",
+                        (emp_id, np_project["id"]),
+                    )
+                    conn.commit()
+                    all_np_lines = [cur.lastrowid]
+                    np_lines_for_emp[emp_id] = all_np_lines
+
+                # Pick the NP line with the most effort this month so we
+                # bump an existing visible row, not an empty one.
+                best_line = all_np_lines[0]
+                best_pct = -1.0
+                for np_lid in all_np_lines:
+                    eff = conn.execute(
+                        "SELECT percentage FROM efforts"
+                        " WHERE allocation_line_id = ? AND year = ? AND month = ?",
+                        (np_lid, year, month),
+                    ).fetchone()
+                    pct = eff["percentage"] if eff else 0.0
+                    if pct > best_pct:
+                        best_pct = pct
+                        best_line = np_lid
+                old_pct = best_pct if best_pct > 0 else 0.0
+                changes.append({
+                    "allocation_line_id": best_line,
+                    "year": year, "month": month,
+                    "old_percentage": old_pct,
+                    "new_percentage": old_pct + diff,
+                })
+            else:
+                # Over 100 — reduce NP lines until we've cut enough.
+                excess = -diff  # positive amount to remove
+                for np_lid in all_np_lines:
+                    if excess <= 0.01:
+                        break
+                    eff = conn.execute(
+                        "SELECT percentage FROM efforts"
+                        " WHERE allocation_line_id = ? AND year = ? AND month = ?",
+                        (np_lid, year, month),
+                    ).fetchone()
+                    if eff is None:
+                        continue
+                    old_pct = eff["percentage"]
+                    if old_pct <= 0.01:
+                        continue
+                    cut = min(old_pct, excess)
+                    changes.append({
+                        "allocation_line_id": np_lid,
+                        "year": year, "month": month,
+                        "old_percentage": old_pct,
+                        "new_percentage": old_pct - cut,
+                    })
+                    excess -= cut
+
+    conn.close()
+
+    for c in changes:
+        pct = c["new_percentage"]
+        update_effort(db_path, c["allocation_line_id"], c["year"], c["month"],
+                      pct if pct > 0.01 else None)
+
+    return changes
+
+
 def add_allocation_line(db_path: str | Path, employee_name: str,
                         project_code: str, project_name: str | None = None) -> int:
     """Add a new allocation line for an employee and project.
