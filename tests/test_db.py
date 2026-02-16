@@ -19,7 +19,7 @@ def test_schema_creates_all_tables(conn):
             "SELECT name FROM sqlite_master WHERE type='table'"
         )
     }
-    assert tables == {"groups", "employees", "projects", "allocation_lines", "efforts"}
+    assert tables == {"groups", "employees", "projects", "allocation_lines", "efforts", "_meta", "audit_log"}
 
 
 def test_create_schema_is_idempotent(conn):

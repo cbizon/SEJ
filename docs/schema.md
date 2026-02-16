@@ -88,6 +88,36 @@ should sum to approximately 100% for any given month.
 
 ---
 
+### `_meta`
+
+Key-value metadata about this database file. Used by the branching system to
+track whether a database is the main copy or a branch.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `key` | text | PK |
+| `value` | text | |
+
+Known keys:
+- `db_role`: `"main"` or `"branch"`
+- `branch_name`: name of the branch (null for main)
+- `source_db`: path to the main DB this was branched from
+
+---
+
+### `audit_log`
+
+Records significant operations: loads, branch creation, merges, and deletions.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PK |
+| `timestamp` | text | NOT NULL, ISO-8601 |
+| `action` | text | NOT NULL — `load`, `branch_create`, `merge`, `branch_delete` |
+| `details` | text | JSON blob with context (branch name, TSV path, etc.) |
+
+---
+
 ## Entity Relationships
 
 ```

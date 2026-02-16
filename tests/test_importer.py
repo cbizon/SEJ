@@ -3,7 +3,7 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from sej.importer import load_tsv, NON_PROJECT_CODE
+from sej.importer import load_tsv, load_tsv_as_branch, NON_PROJECT_CODE
 
 
 HEADER = [
@@ -130,3 +130,54 @@ def test_project_name_populated(tmp):
         "SELECT name FROM projects WHERE project_code = '5199999'"
     ).fetchone()
     assert project["name"] == "The Big Project"
+
+
+def test_load_as_branch_bootstrap(tmp):
+    """First load goes directly into main when DB doesn't exist."""
+    tsv = _tsv(tmp)
+    db = _db(tmp)
+    write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project", "50.00%", "60.00%"],
+    ])
+    result = load_tsv_as_branch(tsv, db)
+    assert result == db
+    assert db.exists()
+
+    from sej.db import get_connection
+    conn = get_connection(db)
+    employees = conn.execute("SELECT * FROM employees").fetchall()
+    assert len(employees) == 1
+
+
+def test_load_as_branch_creates_branch(tmp):
+    """Subsequent load creates a branch instead of overwriting main."""
+    tsv = _tsv(tmp)
+    db = _db(tmp)
+    write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project", "50.00%", "60.00%"],
+    ])
+    load_tsv(tsv, db)  # bootstrap
+
+    # Now do a second load via branch
+    write_tsv(tsv, [
+        ["Jones,Bob", "Ops", "20152", "12001", "512120",
+         "", "", "", "VROPS", "N/A", "N/A", "100.00%", "100.00%"],
+    ])
+    result = load_tsv_as_branch(tsv, db, branch_name="reload")
+    assert result != db
+    assert result.exists()
+
+    # Main should still have original data
+    from sej.db import get_connection
+    conn = get_connection(db)
+    employees = conn.execute("SELECT name FROM employees").fetchall()
+    assert len(employees) == 1
+    assert employees[0]["name"] == "Smith,Jane"
+
+    # Branch should have new data
+    conn2 = get_connection(result)
+    employees2 = conn2.execute("SELECT name FROM employees").fetchall()
+    assert len(employees2) == 1
+    assert employees2[0]["name"] == "Jones,Bob"

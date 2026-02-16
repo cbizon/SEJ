@@ -1,4 +1,5 @@
 import csv
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -7,6 +8,7 @@ import pytest
 
 from sej.importer import load_tsv
 from sej.app import create_app, main
+from sej.branch import create_branch
 
 
 HEADER = [
@@ -47,6 +49,20 @@ def loaded_db(tmp_path):
 @pytest.fixture
 def client(loaded_db):
     app = create_app(db_path=loaded_db)
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        yield c
+
+
+@pytest.fixture
+def branch_db(loaded_db):
+    """Create a branch from the loaded main DB and return its path."""
+    return create_branch(loaded_db, "test_edit")
+
+
+@pytest.fixture
+def branch_client(branch_db):
+    app = create_app(db_path=branch_db)
     app.config["TESTING"] = True
     with app.test_client() as c:
         yield c
@@ -112,3 +128,114 @@ def test_main_exits_on_uninitialized_db(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         main()
     assert "initialized" in str(exc.value)
+
+
+# --- New endpoint tests ---
+
+def test_api_data_not_editable_on_main(client):
+    payload = client.get("/api/data").json
+    assert payload["editable"] is False
+    assert payload["branch_name"] is None
+
+
+def test_api_data_editable_on_branch(branch_client):
+    payload = branch_client.get("/api/data").json
+    assert payload["editable"] is True
+    assert payload["branch_name"] == "test_edit"
+    assert "allocation_line_id" in payload["columns"]
+
+
+def test_api_branch_info(branch_client):
+    resp = branch_client.get("/api/branch")
+    assert resp.status_code == 200
+    data = resp.json
+    assert data["db_role"] == "branch"
+    assert data["branch_name"] == "test_edit"
+
+
+def test_api_employees(client):
+    resp = client.get("/api/employees")
+    assert resp.status_code == 200
+    names = [e["name"] for e in resp.json]
+    assert "Smith,Jane" in names
+    assert "Jones,Bob" in names
+
+
+def test_api_projects(client):
+    resp = client.get("/api/projects")
+    assert resp.status_code == 200
+    codes = [p["project_code"] for p in resp.json]
+    assert "5120001" in codes
+    assert "Non-Project" in codes
+
+
+def test_api_effort_forbidden_on_main(client):
+    resp = client.put("/api/effort", json={
+        "allocation_line_id": 1, "year": 2025, "month": 7, "percentage": 80.0,
+    })
+    assert resp.status_code == 403
+
+
+def test_api_effort_update(branch_client, branch_db):
+    # Get an allocation_line_id from the data
+    payload = branch_client.get("/api/data").json
+    row = payload["data"][0]
+    line_id = row["allocation_line_id"]
+
+    resp = branch_client.put("/api/effort", json={
+        "allocation_line_id": line_id, "year": 2025, "month": 7, "percentage": 80.0,
+    })
+    assert resp.status_code == 200
+
+    # Verify the value changed
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    effort = conn.execute(
+        "SELECT percentage FROM efforts WHERE allocation_line_id = ? AND year = 2025 AND month = 7",
+        (line_id,),
+    ).fetchone()
+    conn.close()
+    assert effort["percentage"] == 80.0
+
+
+def test_api_effort_invalid_percentage(branch_client):
+    payload = branch_client.get("/api/data").json
+    line_id = payload["data"][0]["allocation_line_id"]
+
+    resp = branch_client.put("/api/effort", json={
+        "allocation_line_id": line_id, "year": 2025, "month": 7, "percentage": 150.0,
+    })
+    assert resp.status_code == 400
+
+
+def test_api_allocation_line_forbidden_on_main(client):
+    resp = client.post("/api/allocation_line", json={
+        "employee_name": "Smith,Jane", "project_code": "NEW001",
+    })
+    assert resp.status_code == 403
+
+
+def test_api_allocation_line_create(branch_client):
+    resp = branch_client.post("/api/allocation_line", json={
+        "employee_name": "Smith,Jane",
+        "project_code": "NEW001",
+        "project_name": "New Project",
+    })
+    assert resp.status_code == 200
+    assert "allocation_line_id" in resp.json
+
+
+def test_api_allocation_line_new_project(branch_client, branch_db):
+    branch_client.post("/api/allocation_line", json={
+        "employee_name": "Jones,Bob",
+        "project_code": "BRAND_NEW",
+        "project_name": "Brand New Project",
+    })
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    proj = conn.execute(
+        "SELECT name FROM projects WHERE project_code = 'BRAND_NEW'"
+    ).fetchone()
+    conn.close()
+    assert proj["name"] == "Brand New Project"

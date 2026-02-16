@@ -51,5 +51,17 @@ def create_schema(conn: sqlite3.Connection) -> None:
             percentage         REAL    NOT NULL,
             UNIQUE (allocation_line_id, year, month)
         );
+
+        CREATE TABLE IF NOT EXISTS _meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id        INTEGER PRIMARY KEY,
+            timestamp TEXT    NOT NULL,
+            action    TEXT    NOT NULL,
+            details   TEXT
+        );
     """)
     conn.commit()
