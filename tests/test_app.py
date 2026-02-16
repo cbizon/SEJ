@@ -229,24 +229,36 @@ def test_api_allocation_line_forbidden_on_main(client):
 def test_api_allocation_line_create(branch_client):
     resp = branch_client.post("/api/allocation_line", json={
         "employee_name": "Smith,Jane",
-        "project_code": "NEW001",
-        "project_name": "New Project",
+        "project_code": "5120001",
     })
     assert resp.status_code == 200
     assert "allocation_line_id" in resp.json
 
 
-def test_api_allocation_line_new_project(branch_client, branch_db):
-    branch_client.post("/api/allocation_line", json={
-        "employee_name": "Jones,Bob",
-        "project_code": "BRAND_NEW",
-        "project_name": "Brand New Project",
+def test_api_allocation_line_unknown_project(branch_client):
+    resp = branch_client.post("/api/allocation_line", json={
+        "employee_name": "Smith,Jane",
+        "project_code": "NONEXISTENT",
     })
+    assert resp.status_code == 400
+
+
+def test_api_add_project_forbidden_on_main(client):
+    resp = client.post("/api/project", json={"name": "Test Project"})
+    assert resp.status_code == 403
+
+
+def test_api_add_project(branch_client, branch_db):
+    resp = branch_client.post("/api/project", json={
+        "name": "Brand New Project",
+    })
+    assert resp.status_code == 200
+    code = resp.json["project_code"]
 
     from sej.db import get_connection
     conn = get_connection(branch_db)
     proj = conn.execute(
-        "SELECT name FROM projects WHERE project_code = 'BRAND_NEW'"
+        "SELECT name FROM projects WHERE project_code = ?", (code,)
     ).fetchone()
     conn.close()
     assert proj["name"] == "Brand New Project"

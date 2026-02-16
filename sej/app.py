@@ -14,6 +14,7 @@ from sej.queries import (
     get_branch_info,
     update_effort,
     add_allocation_line,
+    add_project,
     fix_totals,
     get_audit_log,
     get_nonproject_by_group,
@@ -126,10 +127,28 @@ def create_app(db_path=None):
 
         employee_name = body["employee_name"]
         project_code = body["project_code"]
-        project_name = body.get("project_name")
 
-        line_id = add_allocation_line(db, employee_name, project_code, project_name)
+        try:
+            line_id = add_allocation_line(db, employee_name, project_code)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
         return jsonify({"allocation_line_id": line_id})
+
+    @app.route("/api/project", methods=["POST"])
+    def api_add_project():
+        db = _resolve_db(app)
+        info = get_branch_info(db)
+        if info.get("db_role") != "branch":
+            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "Request body must be JSON"}), 400
+        if "name" not in body or not body["name"].strip():
+            return jsonify({"error": "Missing required field: name"}), 400
+
+        project_code = add_project(db, body["name"].strip())
+        return jsonify({"project_code": project_code})
 
     @app.route("/api/fix-totals", methods=["POST"])
     def api_fix_totals():

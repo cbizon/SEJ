@@ -491,10 +491,11 @@ def fix_totals(db_path: str | Path) -> list[dict]:
 
 
 def add_allocation_line(db_path: str | Path, employee_name: str,
-                        project_code: str, project_name: str | None = None) -> int:
+                        project_code: str) -> int:
     """Add a new allocation line for an employee and project.
 
-    Creates the project if it doesn't exist. Returns the new allocation_line_id.
+    Returns the new allocation_line_id. Raises ValueError if the employee
+    or project is not found.
     """
     conn = get_connection(db_path)
 
@@ -508,22 +509,39 @@ def add_allocation_line(db_path: str | Path, employee_name: str,
         "SELECT id FROM projects WHERE project_code = ?", (project_code,)
     ).fetchone()
     if proj is None:
-        cur = conn.execute(
-            "INSERT INTO projects (project_code, name) VALUES (?, ?)",
-            (project_code, project_name),
-        )
-        project_id = cur.lastrowid
-    else:
-        project_id = proj["id"]
+        raise ValueError(f"Project not found: {project_code}")
 
     cur = conn.execute(
         "INSERT INTO allocation_lines (employee_id, project_id) VALUES (?, ?)",
-        (emp["id"], project_id),
+        (emp["id"], proj["id"]),
     )
     conn.commit()
     line_id = cur.lastrowid
     conn.close()
     return line_id
+
+
+def add_project(db_path: str | Path, name: str) -> str:
+    """Add a new project with an auto-generated project code.
+
+    Finds the maximum numeric project code and increments by 1.
+    Returns the new project_code.
+    """
+    conn = get_connection(db_path)
+    row = conn.execute("""
+        SELECT MAX(CAST(project_code AS INTEGER)) AS max_code
+        FROM projects
+        WHERE project_code GLOB '[0-9]*'
+    """).fetchone()
+    max_code = row["max_code"] if row["max_code"] is not None else 0
+    new_code = str(max_code + 1)
+    conn.execute(
+        "INSERT INTO projects (project_code, name) VALUES (?, ?)",
+        (new_code, name),
+    )
+    conn.commit()
+    conn.close()
+    return new_code
 
 
 def get_nonproject_by_group(db_path: str | Path) -> dict:
