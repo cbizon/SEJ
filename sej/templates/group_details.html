@@ -79,9 +79,9 @@
             const trs = rows.map(row => {
                 const isTotal = totalRowKey && row[totalRowKey] === "Total";
                 const cls = isTotal ? ' class="total-row"' : '';
-                const tds = headers.map((h, i) => {
+                const tds = headers.map(h => {
                     const v = row[h];
-                    const formatted = i === 0 ? (v ?? "") : fmt(v);
+                    const formatted = (typeof v === 'number') ? fmt(v) : (v ?? "");
                     return `<td>${formatted}</td>`;
                 }).join("");
                 return `<tr${cls}>${tds}</tr>`;
@@ -142,6 +142,11 @@
                 }
             });
 
+        function showError(msg) {
+            document.getElementById("content").innerHTML =
+                `<p style="color:#dc3545;font-weight:600">Error: ${msg}</p>`;
+        }
+
         function loadGroup(group) {
             if (!group) {
                 document.getElementById("content").innerHTML =
@@ -151,8 +156,14 @@
             document.getElementById("content").innerHTML =
                 '<p class="placeholder">Loading&hellip;</p>';
             fetch(`/api/group-details?group=${encodeURIComponent(group)}`)
-                .then(r => r.json())
-                .then(render);
+                .then(r => {
+                    if (!r.ok) {
+                        return r.text().then(t => { throw new Error(`Server error ${r.status}: ${t}`); });
+                    }
+                    return r.json();
+                })
+                .then(render)
+                .catch(err => showError(err.message));
         }
 
         document.getElementById("group-select").addEventListener("change", e => {
