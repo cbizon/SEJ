@@ -34,6 +34,7 @@
     <nav><a href="/reports">&larr; Reports</a></nav>
     <p class="subtitle">Percentage of each group's total recorded effort that goes to Non-Project (overhead/admin) work, by month.</p>
 
+    <h2 style="margin:0.75rem 0 0.25rem;font-size:1.05em;color:#343a40">Average Non-Project %</h2>
     <div id="toolbar">
         <div class="col-picker">
             <button id="col-btn">Columns &#9660;</button>
@@ -42,6 +43,15 @@
     </div>
     <div id="table"></div>
 
+    <h2 style="margin:1.5rem 0 0.25rem;font-size:1.05em;color:#343a40">Non-Project FTE</h2>
+    <div id="fte-toolbar">
+        <div class="col-picker">
+            <button id="fte-col-btn">Columns &#9660;</button>
+            <div id="fte-col-dropdown" class="col-dropdown"></div>
+        </div>
+    </div>
+    <div id="fte-table"></div>
+
     <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
     <script>
         function pctFormatter(cell) {
@@ -49,51 +59,69 @@
             return (v != null && v !== "") ? v.toFixed(1) + "%" : "";
         }
 
+        function fteFormatter(cell) {
+            const v = cell.getValue();
+            return (v != null && v !== "") ? v.toFixed(2) : "";
+        }
+
+        function buildColPicker(btnId, dropdownId, table) {
+            const btn = document.getElementById(btnId);
+            const dropdown = document.getElementById(dropdownId);
+            table.on("tableBuilt", () => {
+                table.getColumns().forEach(col => {
+                    const label = document.createElement("label");
+                    const cb = document.createElement("input");
+                    cb.type = "checkbox";
+                    cb.checked = col.isVisible();
+                    cb.addEventListener("change", () => col.toggle());
+                    label.appendChild(cb);
+                    label.appendChild(document.createTextNode("\u00a0" + col.getDefinition().title));
+                    dropdown.appendChild(label);
+                });
+            });
+            btn.addEventListener("click", e => { e.stopPropagation(); dropdown.classList.toggle("open"); });
+            dropdown.addEventListener("click", e => e.stopPropagation());
+        }
+
         fetch("/api/nonproject-by-group")
             .then(r => r.json())
-            .then(({months, rows}) => {
-                const totalRow = rows.find(r => r.group === "Total");
-                const dataRows = rows.filter(r => r.group !== "Total");
+            .then(({months, rows, fte_rows}) => {
+                const pctTotal = rows.find(r => r.group === "Total");
+                const pctData  = rows.filter(r => r.group !== "Total");
+                const fteTotal = fte_rows.find(r => r.group === "Total");
+                const fteData  = fte_rows.filter(r => r.group !== "Total");
 
-                const colDefs = [
-                    { title: "Group", field: "group", headerFilter: "input", frozen: true },
-                    ...months.map(m => ({
+                function monthColDef(fmt, total) {
+                    return m => ({
                         title: m, field: m,
                         headerFilter: "input",
                         sorter: "number",
                         hozAlign: "right",
                         headerHozAlign: "right",
-                        formatter: pctFormatter,
-                        bottomCalc: totalRow ? () => totalRow[m] : undefined,
-                        bottomCalcFormatter: pctFormatter,
-                    }))
+                        formatter: fmt,
+                        bottomCalc: total ? () => total[m] : undefined,
+                        bottomCalcFormatter: fmt,
+                    });
+                }
+
+                const pctCols = [
+                    { title: "Group", field: "group", headerFilter: "input", frozen: true },
+                    ...months.map(monthColDef(pctFormatter, pctTotal)),
+                ];
+                const fteCols = [
+                    { title: "Group", field: "group", headerFilter: "input", frozen: true },
+                    ...months.map(monthColDef(fteFormatter, fteTotal)),
                 ];
 
-                const table = new Tabulator("#table", {
-                    data: dataRows,
-                    columns: colDefs,
-                    layout: "fitDataFill",
-                });
+                const pctTable = new Tabulator("#table",     { data: pctData, columns: pctCols, layout: "fitDataFill" });
+                const fteTable = new Tabulator("#fte-table", { data: fteData, columns: fteCols, layout: "fitDataFill" });
 
-                const btn = document.getElementById("col-btn");
-                const dropdown = document.getElementById("col-dropdown");
+                buildColPicker("col-btn",     "col-dropdown",     pctTable);
+                buildColPicker("fte-col-btn", "fte-col-dropdown", fteTable);
 
-                table.on("tableBuilt", () => {
-                    table.getColumns().forEach(col => {
-                        const label = document.createElement("label");
-                        const cb = document.createElement("input");
-                        cb.type = "checkbox";
-                        cb.checked = col.isVisible();
-                        cb.addEventListener("change", () => col.toggle());
-                        label.appendChild(cb);
-                        label.appendChild(document.createTextNode("\u00a0" + col.getDefinition().title));
-                        dropdown.appendChild(label);
-                    });
-                });
-
-                btn.addEventListener("click", e => { e.stopPropagation(); dropdown.classList.toggle("open"); });
-                dropdown.addEventListener("click", e => e.stopPropagation());
-                document.addEventListener("click", () => dropdown.classList.remove("open"));
+                document.addEventListener("click", () =>
+                    document.querySelectorAll(".col-dropdown").forEach(d => d.classList.remove("open"))
+                );
             });
     </script>
 </body>

@@ -891,6 +891,41 @@ def test_api_nonproject_by_group_total_correct(main_client):
         )
 
 
+def test_api_nonproject_by_group_has_fte_rows(main_client):
+    data = main_client.get("/api/nonproject-by-group").json
+    assert "fte_rows" in data
+    assert isinstance(data["fte_rows"], list)
+
+
+def test_api_nonproject_by_group_fte_total_row(main_client):
+    data = main_client.get("/api/nonproject-by-group").json
+    assert data["fte_rows"][-1]["group"] == "Total"
+
+
+def test_api_nonproject_by_group_fte_ops(main_client):
+    # Jones,Bob (Ops) is 1 employee at 100% NP → FTE = 1.0
+    data = main_client.get("/api/nonproject-by-group").json
+    ops_row = next(r for r in data["fte_rows"] if r["group"] == "Ops")
+    for month in data["months"]:
+        assert abs(ops_row[month] - 1.0) < 0.01, f"Ops FTE {month}: expected 1.0, got {ops_row[month]}"
+
+
+def test_api_nonproject_by_group_fte_engineering(main_client):
+    # Smith,Jane (Engineering) has 0% NP → FTE = 0.0
+    data = main_client.get("/api/nonproject-by-group").json
+    eng_row = next(r for r in data["fte_rows"] if r["group"] == "Engineering")
+    for month in data["months"]:
+        assert eng_row[month] == 0.0
+
+
+def test_api_nonproject_by_group_fte_total(main_client):
+    # 2 employees total: 1 fully NP (Jones,Bob), 1 fully project (Smith,Jane) → total FTE = 0.5 * 2 = 1.0
+    data = main_client.get("/api/nonproject-by-group").json
+    total_row = data["fte_rows"][-1]
+    for month in data["months"]:
+        assert abs(total_row[month] - 1.0) < 0.01, f"Total FTE {month}: expected 1.0, got {total_row[month]}"
+
+
 # --- Group Details report tests ---
 
 def test_report_group_details_page_returns_200(main_client):

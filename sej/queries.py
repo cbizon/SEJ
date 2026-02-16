@@ -527,11 +527,12 @@ def add_allocation_line(db_path: str | Path, employee_name: str,
 
 
 def get_nonproject_by_group(db_path: str | Path) -> dict:
-    """Return Non-Project effort as a percentage of total effort, by group and month.
+    """Return Non-Project effort by group and month.
 
     Returns a dict with:
-        months: list of month label strings in chronological order
-        rows:   list of {group, <month_label>: pct, ...} dicts, sorted by group name
+        months:    list of month label strings in chronological order
+        rows:      {group, <month>: np_pct, ...} — average NP % per group
+        fte_rows:  {group, <month>: fte, ...} — NP FTE (avg_pct * employee_count)
     """
     conn = get_connection(db_path)
     create_schema(conn)
@@ -543,7 +544,8 @@ def get_nonproject_by_group(db_path: str | Path) -> dict:
             e.year,
             e.month,
             SUM(CASE WHEN p.project_code = 'Non-Project' THEN e.percentage ELSE 0 END) AS np_effort,
-            SUM(e.percentage) AS total_effort
+            SUM(e.percentage) AS total_effort,
+            COUNT(DISTINCT emp.id) AS employee_count
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
@@ -558,9 +560,11 @@ def get_nonproject_by_group(db_path: str | Path) -> dict:
             e.year,
             e.month,
             SUM(CASE WHEN p.project_code = 'Non-Project' THEN e.percentage ELSE 0 END) AS np_effort,
-            SUM(e.percentage) AS total_effort
+            SUM(e.percentage) AS total_effort,
+            COUNT(DISTINCT emp.id) AS employee_count
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN employees emp ON emp.id = al.employee_id
         JOIN projects p ON p.id = al.project_id
         GROUP BY e.year, e.month
         ORDER BY e.year, e.month
@@ -569,33 +573,47 @@ def get_nonproject_by_group(db_path: str | Path) -> dict:
 
     month_labels = [_month_label(y, m) for y, m in months]
 
-    # Build a lookup: group_name -> month_label -> pct
-    data: dict[str, dict[str, float]] = {}
+    pct_data: dict[str, dict[str, float]] = {}
+    fte_data: dict[str, dict[str, float]] = {}
     for r in group_rows:
         g = r["group_name"]
         label = _month_label(r["year"], r["month"])
         total = r["total_effort"]
-        pct = (r["np_effort"] / total * 100.0) if total else 0.0
-        data.setdefault(g, {})[label] = pct
+        np_e = r["np_effort"]
+        emp_count = r["employee_count"]
+        pct = (np_e / total * 100.0) if total else 0.0
+        fte = (np_e / total * emp_count) if total else 0.0
+        pct_data.setdefault(g, {})[label] = pct
+        fte_data.setdefault(g, {})[label] = fte
 
     result_rows = []
-    for g in sorted(data.keys()):
-        row: dict = {"group": g}
+    fte_rows = []
+    for g in sorted(pct_data.keys()):
+        pct_row: dict = {"group": g}
+        fte_row: dict = {"group": g}
         for label in month_labels:
-            row[label] = round(data[g].get(label, 0.0), 1)
-        result_rows.append(row)
+            pct_row[label] = round(pct_data[g].get(label, 0.0), 1)
+            fte_row[label] = round(fte_data[g].get(label, 0.0), 2)
+        result_rows.append(pct_row)
+        fte_rows.append(fte_row)
 
-    # Total row across all employees
-    total_row: dict = {"group": "Total"}
+    # Total rows
+    pct_total: dict = {"group": "Total"}
+    fte_total: dict = {"group": "Total"}
     for r in total_rows:
         label = _month_label(r["year"], r["month"])
         t = r["total_effort"]
-        total_row[label] = round((r["np_effort"] / t * 100.0) if t else 0.0, 1)
+        np_e = r["np_effort"]
+        emp_count = r["employee_count"]
+        pct_total[label] = round((np_e / t * 100.0) if t else 0.0, 1)
+        fte_total[label] = round((np_e / t * emp_count) if t else 0.0, 2)
     for label in month_labels:
-        total_row.setdefault(label, 0.0)
-    result_rows.append(total_row)
+        pct_total.setdefault(label, 0.0)
+        fte_total.setdefault(label, 0.0)
+    result_rows.append(pct_total)
+    fte_rows.append(fte_total)
 
-    return {"months": month_labels, "rows": result_rows}
+    return {"months": month_labels, "rows": result_rows, "fte_rows": fte_rows}
 
 
 def get_audit_log(db_path: str | Path) -> list[dict]:
