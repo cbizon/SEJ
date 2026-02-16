@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>SEJ - History</title>
+    <style>
+        body {
+            font-family: "Segoe UI", Arial, sans-serif;
+            margin: 1rem;
+            background: #f8f9fa;
+        }
+        h1 { margin-bottom: 0.25rem; }
+        nav { margin-bottom: 1rem; }
+        nav a { margin-right: 1rem; text-decoration: none; color: #0d6efd; }
+        nav a:hover { text-decoration: underline; }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            background: #fff;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+        }
+        th {
+            background: #343a40;
+            color: #fff;
+            padding: 8px 12px;
+            text-align: left;
+            white-space: nowrap;
+        }
+        td { padding: 7px 12px; border-bottom: 1px solid #dee2e6; vertical-align: top; }
+        tr:last-child td { border-bottom: none; }
+        tr:hover td { background: #f1f3f5; }
+        .action-load     { background: #d1ecf1; color: #0c5460; padding: 2px 7px; border-radius: 3px; font-size: 0.85em; }
+        .action-merge    { background: #d4edda; color: #155724; padding: 2px 7px; border-radius: 3px; font-size: 0.85em; }
+        .action-branch_create  { background: #fff3cd; color: #856404; padding: 2px 7px; border-radius: 3px; font-size: 0.85em; }
+        .action-branch_delete  { background: #f8d7da; color: #721c24; padding: 2px 7px; border-radius: 3px; font-size: 0.85em; }
+        .action-revert   { background: #e2d9f3; color: #4a235a; padding: 2px 7px; border-radius: 3px; font-size: 0.85em; }
+        .tsv-link { color: #0d6efd; text-decoration: none; font-size: 0.9em; }
+        .tsv-link:hover { text-decoration: underline; }
+        .empty { color: #6c757d; font-style: italic; margin-top: 2rem; }
+        .changes-count { font-size: 0.85em; color: #555; }
+    </style>
+</head>
+<body>
+    <h1>Commit History</h1>
+    <nav>
+        <a href="/reports">&larr; Reports</a>
+    </nav>
+
+    <div id="content">Loading&hellip;</div>
+
+    <script>
+        const ACTION_LABELS = {
+            load: "load",
+            merge: "merge",
+            branch_create: "branch create",
+            branch_delete: "branch discard",
+            revert: "revert",
+        };
+
+        function formatTimestamp(ts) {
+            // ts is ISO-8601; display in local time
+            const d = new Date(ts);
+            return d.toLocaleString(undefined, {
+                year: "numeric", month: "short", day: "numeric",
+                hour: "2-digit", minute: "2-digit", second: "2-digit",
+            });
+        }
+
+        function tsvFilename(tsvPath) {
+            // Extract just the filename from the full path
+            return tsvPath ? tsvPath.replace(/\\/g, "/").split("/").pop() : null;
+        }
+
+        function describeEntry(entry) {
+            const d = entry.details;
+            const action = entry.action;
+            if (action === "merge") {
+                const branch = d.branch_name || "";
+                const n = d.changes_count != null ? d.changes_count : "?";
+                return `Merged branch <em>${branch}</em> &mdash; ${n} change${n === 1 ? "" : "s"}`;
+            }
+            if (action === "load") {
+                const src = d.source_file ? tsvFilename(d.source_file) : "";
+                const rows = d.rows_loaded != null ? ` (${d.rows_loaded} rows)` : "";
+                return src ? `Loaded <em>${src}</em>${rows}` : "Data loaded";
+            }
+            if (action === "branch_create") {
+                return `Branch <em>${d.branch_name || ""}</em> created`;
+            }
+            if (action === "branch_delete") {
+                return `Branch <em>${d.branch_name || ""}</em> discarded`;
+            }
+            if (action === "revert") {
+                const bp = d.backup_path ? tsvFilename(d.backup_path) : "";
+                return bp ? `Reverted to backup <em>${bp}</em>` : "Reverted to backup";
+            }
+            return JSON.stringify(d);
+        }
+
+        fetch("/api/history")
+            .then(r => r.json())
+            .then(entries => {
+                const content = document.getElementById("content");
+                if (!entries.length) {
+                    content.innerHTML = '<p class="empty">No history entries found.</p>';
+                    return;
+                }
+
+                const rows = entries.map(entry => {
+                    const actionClass = `action-${entry.action}`;
+                    const label = ACTION_LABELS[entry.action] || entry.action;
+                    const ts = formatTimestamp(entry.timestamp);
+                    const desc = describeEntry(entry);
+
+                    let tsvCell = "";
+                    if (entry.action === "merge" && entry.details.tsv_path) {
+                        const fname = tsvFilename(entry.details.tsv_path);
+                        if (fname) {
+                            tsvCell = `<a class="tsv-link" href="/merges/${encodeURIComponent(fname)}" download>${fname}</a>`;
+                        }
+                    }
+
+                    return `<tr>
+                        <td>${ts}</td>
+                        <td><span class="${actionClass}">${label}</span></td>
+                        <td>${desc}</td>
+                        <td>${tsvCell}</td>
+                    </tr>`;
+                }).join("");
+
+                content.innerHTML = `
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Action</th>
+                                <th>Description</th>
+                                <th>Changes file</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>`;
+            });
+    </script>
+</body>
+</html>

@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>SEJ - Project Details</title>
+    <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator.min.css" rel="stylesheet">
+    <style>
+        body { font-family: "Segoe UI", Arial, sans-serif; margin: 1rem; background: #f8f9fa; }
+        h1 { margin-bottom: 0.25rem; }
+        nav { margin-bottom: 0.5rem; }
+        nav a { margin-right: 1rem; text-decoration: none; color: #0d6efd; }
+        nav a:hover { text-decoration: underline; }
+        .controls { margin-bottom: 1rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .controls label { font-weight: 600; }
+        .controls select { padding: 4px 8px; font-size: 1em; }
+        h2 { margin: 1.25rem 0 0.4rem; font-size: 1.05em; color: #343a40; }
+        .toolbar { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
+        .col-picker { position: relative; display: inline-block; }
+        .col-dropdown {
+            display: none; position: absolute; top: 100%; left: 0;
+            background: #fff; border: 1px solid #ccc; padding: 8px 12px;
+            z-index: 100; min-width: 180px; max-height: 400px; overflow-y: auto;
+            box-shadow: 2px 2px 6px rgba(0,0,0,0.2);
+        }
+        .col-dropdown.open { display: block; }
+        .col-dropdown label { display: block; cursor: pointer; padding: 3px 0; white-space: nowrap; }
+        button { cursor: pointer; padding: 4px 10px; }
+        #project-placeholder { color: #6c757d; font-style: italic; margin-top: 0.5rem; }
+        #error { display: none; color: #dc3545; font-weight: 600; }
+        #people-table .tabulator-tableholder { padding-bottom: 17px; }
+    </style>
+</head>
+<body>
+    <h1>Project Details</h1>
+    <nav><a href="/reports">&larr; Reports</a></nav>
+
+    <div class="controls">
+        <label for="project-select">Project:</label>
+        <select id="project-select">
+            <option value="">Loading&hellip;</option>
+        </select>
+    </div>
+
+    <div id="error"></div>
+    <p id="project-placeholder">Select a project above.</p>
+
+    <div id="fte-section">
+        <h2>Total FTE by Month</h2>
+        <div class="toolbar">
+            <div class="col-picker">
+                <button id="fte-col-btn">Columns &#9660;</button>
+                <div id="fte-col-dropdown" class="col-dropdown"></div>
+            </div>
+        </div>
+        <div id="fte-table"></div>
+    </div>
+
+    <div id="people-section">
+        <h2>Individual Effort by Month</h2>
+        <div class="toolbar">
+            <div class="col-picker">
+                <button id="people-col-btn">Columns &#9660;</button>
+                <div id="people-col-dropdown" class="col-dropdown"></div>
+            </div>
+        </div>
+        <div id="people-table"></div>
+    </div>
+
+    <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+    <script>
+        let fteTable = null;
+        let peopleTable = null;
+
+        function fteFormatter(cell) {
+            const v = cell.getValue();
+            return (v != null && v !== "") ? v.toFixed(2) : "";
+        }
+
+        function pctFormatter(cell) {
+            const v = cell.getValue();
+            return (v != null && v !== "") ? v.toFixed(1) + "%" : "";
+        }
+
+        function fteColDef(m) {
+            return {
+                title: m, field: m,
+                sorter: "number",
+                hozAlign: "right",
+                headerHozAlign: "right",
+                formatter: fteFormatter,
+            };
+        }
+
+        function pctColDef(m) {
+            return {
+                title: m, field: m,
+                sorter: "number",
+                hozAlign: "right",
+                headerHozAlign: "right",
+                formatter: pctFormatter,
+            };
+        }
+
+        function setupColPicker(btnId, dropdownId, table) {
+            const btn = document.getElementById(btnId);
+            const dropdown = document.getElementById(dropdownId);
+            dropdown.innerHTML = "";
+            table.getColumns().forEach(col => {
+                const lbl = document.createElement("label");
+                const cb = document.createElement("input");
+                cb.type = "checkbox";
+                cb.checked = col.isVisible();
+                cb.addEventListener("change", () => col.toggle());
+                lbl.appendChild(cb);
+                lbl.appendChild(document.createTextNode("\u00a0" + col.getDefinition().title));
+                dropdown.appendChild(lbl);
+            });
+            btn.addEventListener("click", e => { e.stopPropagation(); dropdown.classList.toggle("open"); });
+            dropdown.addEventListener("click", e => e.stopPropagation());
+        }
+
+        function initTables(months, fte, people) {
+            document.getElementById("project-placeholder").style.display = "none";
+
+            const fteColDefs = [
+                { title: "Label", field: "label", frozen: true },
+                ...months.map(fteColDef),
+            ];
+            const peopleColDefs = [
+                { title: "Name", field: "name", headerFilter: "input", frozen: true },
+                { title: "Group", field: "group", headerFilter: "input" },
+                ...months.map(pctColDef),
+            ];
+
+            fteTable = new Tabulator("#fte-table", {
+                data: [fte],
+                columns: fteColDefs,
+                layout: "fitDataFill",
+            });
+            peopleTable = new Tabulator("#people-table", {
+                data: people,
+                columns: peopleColDefs,
+                layout: "fitDataFill",
+            });
+
+            fteTable.on("tableBuilt", () => setupColPicker("fte-col-btn", "fte-col-dropdown", fteTable));
+            peopleTable.on("tableBuilt", () => setupColPicker("people-col-btn", "people-col-dropdown", peopleTable));
+        }
+
+        function showError(msg) {
+            const el = document.getElementById("error");
+            el.textContent = "Error: " + msg;
+            el.style.display = "";
+        }
+
+        function loadProject(project) {
+            document.getElementById("error").style.display = "none";
+            if (!project) return;
+
+            fetch(`/api/project-details?project=${encodeURIComponent(project)}`)
+                .then(r => {
+                    if (!r.ok) return r.text().then(t => { throw new Error(`Server error ${r.status}: ${t}`); });
+                    return r.json();
+                })
+                .then(({ months, fte, people }) => {
+                    if (fteTable === null) {
+                        initTables(months, fte, people);
+                    } else {
+                        fteTable.setData([fte]);
+                        peopleTable.setData(people);
+                    }
+                })
+                .catch(err => showError(err.message));
+        }
+
+        fetch("/api/projects")
+            .then(r => r.json())
+            .then(projects => {
+                const sel = document.getElementById("project-select");
+                sel.innerHTML = '<option value="">-- select a project --</option>';
+                projects.forEach(p => {
+                    const opt = document.createElement("option");
+                    opt.value = p.project_code;
+                    opt.textContent = p.project_code + (p.name ? " — " + p.name : "");
+                    sel.appendChild(opt);
+                });
+                if (projects.length === 1) {
+                    sel.value = projects[0].project_code;
+                    loadProject(projects[0].project_code);
+                }
+            });
+
+        document.getElementById("project-select").addEventListener("change", e => loadProject(e.target.value));
+
+        document.addEventListener("click", () => {
+            document.querySelectorAll(".col-dropdown").forEach(d => d.classList.remove("open"));
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>SEJ - Reports</title>
+    <style>
+        body {
+            font-family: "Segoe UI", Arial, sans-serif;
+            margin: 1rem;
+            background: #f8f9fa;
+        }
+        h1 { margin-bottom: 0.25rem; }
+        nav { margin-bottom: 1.5rem; }
+        nav a { margin-right: 1rem; text-decoration: none; color: #0d6efd; }
+        nav a:hover { text-decoration: underline; }
+        .report-list { list-style: none; padding: 0; max-width: 600px; }
+        .report-list li {
+            background: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            margin-bottom: 0.75rem;
+            padding: 1rem 1.25rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        }
+        .report-list li a {
+            font-size: 1.05em;
+            font-weight: 600;
+            color: #0d6efd;
+            text-decoration: none;
+        }
+        .report-list li a:hover { text-decoration: underline; }
+        .report-list li p {
+            margin: 0.3rem 0 0;
+            color: #555;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <h1>Reports</h1>
+    <nav>
+        <a href="/">&larr; Effort Allocations</a>
+    </nav>
+
+    <ul class="report-list">
+        <li>
+            <a href="/history">Edit History</a>
+            <p>Sequence of data loads and edits, with downloadable change logs for each merge.</p>
+        </li>
+        <li>
+            <a href="/reports/nonproject-by-group">Non-Project by Group</a>
+            <p>Month-by-month view of what percentage of each team's effort is overhead rather than project work.</p>
+        </li>
+        <li>
+            <a href="/reports/nonproject-by-person">Non-Project by Person</a>
+            <p>Month-by-month view of what percentage of each individual's effort is overhead rather than project work.</p>
+        </li>
+        <li>
+            <a href="/reports/group-details">Group Details</a>
+            <p>For a selected group: per-person Non-Project percentages by month, and total effort per project across all group members.</p>
+        </li>
+        <li>
+            <a href="/reports/project-details">Project Details</a>
+            <p>For a selected project: total FTE spend per month and individual effort levels per month.</p>
+        </li>
+    </ul>
+</body>
+</html>

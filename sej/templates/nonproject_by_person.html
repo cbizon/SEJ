@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>SEJ - Non-Project by Person</title>
+    <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator.min.css" rel="stylesheet">
+    <style>
+        body { font-family: "Segoe UI", Arial, sans-serif; margin: 1rem; background: #f8f9fa; }
+        h1 { margin-bottom: 0.25rem; }
+        nav { margin-bottom: 0.5rem; }
+        nav a { margin-right: 1rem; text-decoration: none; color: #0d6efd; }
+        nav a:hover { text-decoration: underline; }
+        p.subtitle { color: #555; margin: 0 0 0.75rem; font-size: 0.95em; }
+        #toolbar { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
+        .col-picker { position: relative; display: inline-block; }
+        .col-dropdown {
+            display: none; position: absolute; top: 100%; left: 0;
+            background: #fff; border: 1px solid #ccc; padding: 8px 12px;
+            z-index: 100; min-width: 180px; max-height: 400px; overflow-y: auto;
+            box-shadow: 2px 2px 6px rgba(0,0,0,0.2);
+        }
+        .col-dropdown.open { display: block; }
+        .col-dropdown label { display: block; cursor: pointer; padding: 3px 0; white-space: nowrap; }
+        button { cursor: pointer; padding: 4px 10px; }
+        .tabulator-calcs-bottom .tabulator-cell {
+            font-weight: bold !important;
+            background-color: #e9ecef !important;
+        }
+        .tabulator-calcs-bottom { border-top: 2px solid #495057 !important; }
+    </style>
+</head>
+<body>
+    <h1>Non-Project by Person</h1>
+    <nav><a href="/reports">&larr; Reports</a></nav>
+    <p class="subtitle">Percentage of each person's total recorded effort that goes to Non-Project (overhead/admin) work, by month.</p>
+
+    <div id="toolbar">
+        <div class="col-picker">
+            <button id="col-btn">Columns &#9660;</button>
+            <div id="col-dropdown" class="col-dropdown"></div>
+        </div>
+    </div>
+    <div id="table"></div>
+
+    <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+    <script>
+        function pctFormatter(cell) {
+            const v = cell.getValue();
+            return (v != null && v !== "") ? v.toFixed(1) + "%" : "";
+        }
+
+        fetch("/api/nonproject-by-person")
+            .then(r => r.json())
+            .then(({months, rows}) => {
+                const totalRow = rows.find(r => r.name === "Total");
+                const data = rows.filter(r => r.name !== "Total");
+
+                const cols = [
+                    { title: "Name", field: "name", headerFilter: "input", frozen: true },
+                    { title: "Group", field: "group", headerFilter: "input", frozen: true },
+                    ...months.map(m => ({
+                        title: m, field: m,
+                        headerFilter: "input",
+                        sorter: "number",
+                        hozAlign: "right",
+                        headerHozAlign: "right",
+                        formatter: pctFormatter,
+                        bottomCalc: totalRow ? () => totalRow[m] : undefined,
+                        bottomCalcFormatter: pctFormatter,
+                    })),
+                ];
+
+                const table = new Tabulator("#table", { data, columns: cols, layout: "fitDataFill" });
+
+                const btn = document.getElementById("col-btn");
+                const dropdown = document.getElementById("col-dropdown");
+                table.on("tableBuilt", () => {
+                    table.getColumns().forEach(col => {
+                        const label = document.createElement("label");
+                        const cb = document.createElement("input");
+                        cb.type = "checkbox";
+                        cb.checked = col.isVisible();
+                        cb.addEventListener("change", () => col.toggle());
+                        label.appendChild(cb);
+                        label.appendChild(document.createTextNode("\u00a0" + col.getDefinition().title));
+                        dropdown.appendChild(label);
+                    });
+                });
+                btn.addEventListener("click", e => { e.stopPropagation(); dropdown.classList.toggle("open"); });
+                dropdown.addEventListener("click", e => e.stopPropagation());
+                document.addEventListener("click", () => dropdown.classList.remove("open"));
+            });
+    </script>
+</body>
+</html>

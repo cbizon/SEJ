@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file, abort
 
 from sej.branch import create_branch, merge_branch, delete_branch, list_branches
 from sej.queries import (
@@ -15,6 +15,12 @@ from sej.queries import (
     update_effort,
     add_allocation_line,
     fix_totals,
+    get_audit_log,
+    get_nonproject_by_group,
+    get_nonproject_by_person,
+    get_groups,
+    get_group_details,
+    get_project_details,
 )
 
 
@@ -168,6 +174,80 @@ def create_app(db_path=None):
         branch_name = branches[0]["name"]
         delete_branch(main, branch_name)
         return jsonify({"discarded": branch_name})
+
+    @app.route("/reports")
+    def reports():
+        return render_template("reports.html")
+
+    @app.route("/reports/nonproject-by-group")
+    def report_nonproject_by_group():
+        return render_template("nonproject_by_group.html")
+
+    @app.route("/api/nonproject-by-group")
+    def api_nonproject_by_group():
+        main = app.config["MAIN_DB_PATH"]
+        return jsonify(get_nonproject_by_group(main))
+
+    @app.route("/reports/nonproject-by-person")
+    def report_nonproject_by_person():
+        return render_template("nonproject_by_person.html")
+
+    @app.route("/api/nonproject-by-person")
+    def api_nonproject_by_person():
+        main = app.config["MAIN_DB_PATH"]
+        return jsonify(get_nonproject_by_person(main))
+
+    @app.route("/reports/group-details")
+    def report_group_details():
+        return render_template("group_details.html")
+
+    @app.route("/api/groups")
+    def api_groups():
+        main = app.config["MAIN_DB_PATH"]
+        return jsonify(get_groups(main))
+
+    @app.route("/api/group-details")
+    def api_group_details():
+        main = app.config["MAIN_DB_PATH"]
+        group = request.args.get("group", "")
+        if not group:
+            return jsonify({"error": "Missing required parameter: group"}), 400
+        return jsonify(get_group_details(main, group))
+
+    @app.route("/reports/project-details")
+    def report_project_details():
+        return render_template("project_details.html")
+
+    @app.route("/api/project-details")
+    def api_project_details():
+        main = app.config["MAIN_DB_PATH"]
+        project = request.args.get("project", "")
+        if not project:
+            return jsonify({"error": "Missing required parameter: project"}), 400
+        return jsonify(get_project_details(main, project))
+
+    @app.route("/history")
+    def history():
+        return render_template("history.html")
+
+    @app.route("/api/history")
+    def api_history():
+        main = app.config["MAIN_DB_PATH"]
+        entries = get_audit_log(main)
+        return jsonify(entries)
+
+    @app.route("/merges/<path:filename>")
+    def serve_merge_tsv(filename):
+        main = Path(app.config["MAIN_DB_PATH"])
+        merges_dir = main.parent / "merges"
+        tsv_path = (merges_dir / filename).resolve()
+        # Ensure the resolved path is inside merges_dir (no path traversal)
+        if merges_dir.resolve() not in tsv_path.parents:
+            abort(404)
+        if not tsv_path.exists():
+            abort(404)
+        return send_file(tsv_path, mimetype="text/tab-separated-values",
+                         as_attachment=True, download_name=tsv_path.name)
 
     return app
 
