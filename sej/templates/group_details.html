@@ -118,7 +118,6 @@
                 data: people,
                 columns: peopleColDefs,
                 layout: "fitDataFill",
-                height: "35vh",
                 rowFormatter: row => {
                     if (row.getData().name === "Total") {
                         const el = row.getElement();
@@ -133,7 +132,6 @@
                 data: projects,
                 columns: projectColDefs,
                 layout: "fitDataFill",
-                height: "35vh",
             });
 
             peopleTable.on("tableBuilt", () => setupColPicker("people-col-btn", "people-col-dropdown", peopleTable));
