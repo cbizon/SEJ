@@ -64,9 +64,25 @@
         #selection-toolbar input {
             width: 80px;
             padding: 4px 6px;
+            -moz-appearance: textfield;
+        }
+        #selection-toolbar input::-webkit-inner-spin-button,
+        #selection-toolbar input::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
         }
         #selection-toolbar .count { font-size: 0.9em; color: #666; }
         /* Add-row modal */
+        #add-project-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.4);
+            z-index: 300;
+            justify-content: center;
+            align-items: center;
+        }
+        #add-project-overlay.open { display: flex; }
         #add-row-overlay {
             display: none;
             position: fixed;
@@ -105,6 +121,7 @@
         <button id="select-mode-btn" style="display:none">Selection mode</button>
         <button id="fix-totals-btn" style="display:none">Fix totals</button>
         <button id="add-row-btn" style="display:none">Add allocation line</button>
+        <button id="add-project-btn" style="display:none">Add project</button>
         <button id="save-btn" style="display:none">Save changes</button>
         <button id="discard-btn" style="display:none">Discard changes</button>
     </div>
@@ -121,15 +138,26 @@
         <div id="add-row-form">
             <h3 style="margin-top:0">Add Allocation Line</h3>
             <label>Employee</label>
-            <select id="ar-employee"><option value="">Loading...</option></select>
+            <input id="ar-employee" list="ar-employee-list" placeholder="Type to search">
+            <datalist id="ar-employee-list"></datalist>
             <label>Project Code</label>
             <input id="ar-project-code" list="ar-project-list" placeholder="Type or select">
             <datalist id="ar-project-list"></datalist>
-            <label>Project Name (for new projects)</label>
-            <input id="ar-project-name" placeholder="Optional">
             <div class="btn-row">
                 <button id="ar-cancel">Cancel</button>
                 <button id="ar-submit">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="add-project-overlay">
+        <div id="add-row-form">
+            <h3 style="margin-top:0">Add Project</h3>
+            <label>Project Name</label>
+            <input id="ap-name" placeholder="Enter project name">
+            <div class="btn-row">
+                <button id="ap-cancel">Cancel</button>
+                <button id="ap-submit">Add</button>
             </div>
         </div>
     </div>
@@ -164,17 +192,18 @@
         let selectMode = false;
         let selectedCells = new Set(); // Set of "lineId|field" strings
         let selectedElements = new Map(); // "lineId|field" -> DOM element
+        let isDragging = false;
 
         function applyRowFilter(table) {
             if (showAllRows) {
-                table.clearFilter(true);
+                table.clearFilter();
                 return;
             }
             const visibleMonthFields = table.getColumns()
                 .filter(c => c.isVisible() && monthPattern.test(c.getField()))
                 .map(c => c.getField());
             if (visibleMonthFields.length === 0) {
-                table.clearFilter(true);
+                table.clearFilter();
                 return;
             }
             table.setFilter(row => visibleMonthFields.some(f => row[f] !== "" && row[f] != null));
@@ -226,6 +255,7 @@
                     document.getElementById("select-mode-btn").style.display = "";
                     document.getElementById("fix-totals-btn").style.display = "";
                     document.getElementById("add-row-btn").style.display = "";
+                    document.getElementById("add-project-btn").style.display = "";
                     document.getElementById("save-btn").style.display = "";
                     document.getElementById("discard-btn").style.display = "";
                 } else {
@@ -268,9 +298,10 @@
                             return cell.getValue() ?? "";
                         };
                         if (editable) {
-                            def.cellClick = (e, cell) => {
+                            def.cellMouseDown = (e, cell) => {
                                 if (!selectMode) return;
-                                e.stopPropagation();
+                                e.preventDefault();
+                                isDragging = true;
                                 const rowData = cell.getRow().getData();
                                 const lineId = rowData["allocation_line_id"];
                                 const field = cell.getField();
@@ -287,6 +318,20 @@
                                 }
                                 updateSelectionToolbar();
                             };
+                            def.cellMouseOver = (e, cell) => {
+                                if (!selectMode || !isDragging) return;
+                                const rowData = cell.getRow().getData();
+                                const lineId = rowData["allocation_line_id"];
+                                const field = cell.getField();
+                                const key = `${lineId}|${field}`;
+                                const el = cell.getElement();
+                                if (!selectedCells.has(key)) {
+                                    selectedCells.add(key);
+                                    selectedElements.set(key, el);
+                                    el.classList.add("cell-selected");
+                                    updateSelectionToolbar();
+                                }
+                            };
                         }
                     }
                     return def;
@@ -297,26 +342,37 @@
                     columns: colDefs,
                     layout: "fitDataFill",
                     height: "85vh",
+                    renderMode: "basic",
                     initialSort: [
                         {column: "Group", dir: "asc"},
                         {column: "Employee", dir: "asc"},
                     ],
                 });
 
+                document.addEventListener("mouseup", () => { isDragging = false; });
+
                 function applyGroupBorders() {
                     const sorters = table.getSorters();
-                    const primaryField = sorters.length > 0 ? sorters[0].field : null;
+                    if (sorters.length === 0) return;
+                    const fields = sorters.map(s => s.field);
                     const rows = table.getRows("active");
                     rows.forEach((row, i) => {
                         const el = row.getElement();
                         if (!el) return;
-                        el.style.borderTop = (primaryField && i > 0 &&
-                            row.getData()[primaryField] !== rows[i - 1].getData()[primaryField])
-                            ? "2px solid #888" : "";
+                        const hasBorder = i > 0 && fields.some(f =>
+                            row.getData()[f] !== rows[i - 1].getData()[f]
+                        );
+                        el.style.borderTop = hasBorder ? "2px solid #888" : "";
                     });
                 }
 
-                table.on("renderComplete", applyGroupBorders);
+                function scheduleBorders() {
+                    setTimeout(applyGroupBorders, 0);
+                }
+
+                table.on("renderComplete", scheduleBorders);
+                table.on("dataFiltered", scheduleBorders);
+                table.on("dataSorted", scheduleBorders);
 
                 table.on("cellEditing", (cell) => {
                     if (selectMode) cell.cancelEdit();
@@ -413,10 +469,14 @@
                 document.getElementById("fix-totals-btn").addEventListener("click", () => {
                     fetch("/api/fix-totals", { method: "POST" })
                         .then(r => r.json())
-                        .then(data => {
-                            const n = data.changes ? data.changes.length : 0;
+                        .then(result => {
+                            const n = result.changes ? result.changes.length : 0;
                             alert(`Fixed ${n} cell${n === 1 ? "" : "s"}.`);
-                            window.location.reload();
+                            return fetch("/api/data").then(r => r.json());
+                        })
+                        .then(({data}) => {
+                            table.replaceData(data);
+                            violations = computeViolations(table.getData(), monthFields);
                         });
                 });
 
@@ -480,6 +540,10 @@
                     });
                 });
 
+                document.getElementById("sel-value").addEventListener("keydown", (e) => {
+                    if (e.key === "Enter") document.getElementById("sel-apply").click();
+                });
+
                 document.getElementById("sel-clear").addEventListener("click", clearSelection);
 
                 // Add row
@@ -489,13 +553,13 @@
 
                     // Load employees
                     fetch("/api/employees").then(r => r.json()).then(employees => {
-                        const sel = document.getElementById("ar-employee");
-                        sel.innerHTML = "";
+                        const dl = document.getElementById("ar-employee-list");
+                        dl.innerHTML = "";
                         employees.forEach(e => {
                             const opt = document.createElement("option");
                             opt.value = e.name;
                             opt.textContent = `${e.name} (${e.group})`;
-                            sel.appendChild(opt);
+                            dl.appendChild(opt);
                         });
                     });
 
@@ -519,7 +583,6 @@
                 document.getElementById("ar-submit").addEventListener("click", () => {
                     const employee = document.getElementById("ar-employee").value;
                     const code = document.getElementById("ar-project-code").value.trim();
-                    const name = document.getElementById("ar-project-name").value.trim();
                     if (!employee || !code) {
                         alert("Employee and project code are required.");
                         return;
@@ -530,14 +593,66 @@
                         body: JSON.stringify({
                             employee_name: employee,
                             project_code: code,
-                            project_name: name || null,
                         }),
+                    })
+                    .then(r => {
+                        if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
+                        return r.json();
+                    })
+                    .then(result => {
+                        const newLineId = result.allocation_line_id;
+                        document.getElementById("add-row-overlay").classList.remove("open");
+                        return fetch("/api/data").then(r => r.json()).then(d => ({data: d.data, newLineId}));
+                    })
+                    .then(({data, newLineId}) => {
+                        // Switch to show-all-rows so the new row is visible
+                        if (!showAllRows) {
+                            showAllRows = true;
+                            showAllBtn.classList.add("active");
+                        }
+                        table.replaceData(data).then(() => {
+                            applyRowFilter(table);
+                            violations = computeViolations(table.getData(), monthFields);
+                            // Scroll to the new row
+                            const rows = table.getRows();
+                            for (const row of rows) {
+                                if (row.getData()["allocation_line_id"] === newLineId) {
+                                    table.scrollToRow(row, "center", false);
+                                    row.getElement().style.transition = "background-color 0.5s";
+                                    row.getElement().style.backgroundColor = "#d4edda";
+                                    setTimeout(() => { row.getElement().style.backgroundColor = ""; }, 2000);
+                                    break;
+                                }
+                            }
+                        });
+                    });
+                });
+
+                // Add project
+                document.getElementById("add-project-btn").addEventListener("click", () => {
+                    document.getElementById("ap-name").value = "";
+                    document.getElementById("add-project-overlay").classList.add("open");
+                });
+
+                document.getElementById("ap-cancel").addEventListener("click", () => {
+                    document.getElementById("add-project-overlay").classList.remove("open");
+                });
+
+                document.getElementById("ap-submit").addEventListener("click", () => {
+                    const name = document.getElementById("ap-name").value.trim();
+                    if (!name) {
+                        alert("Project name is required.");
+                        return;
+                    }
+                    fetch("/api/project", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({ name }),
                     })
                     .then(r => r.json())
                     .then(result => {
-                        document.getElementById("add-row-overlay").classList.remove("open");
-                        // Reload the page to refresh table data
-                        location.reload();
+                        document.getElementById("add-project-overlay").classList.remove("open");
+                        alert(`Project created with code: ${result.project_code}`);
                     });
                 });
 

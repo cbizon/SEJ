@@ -27,3 +27,11 @@ The input to this is based on what finance thinks.  We put in changes and later 
 ## PI Report
 
 Show effort levels / burn rates across all projects for which a person is a PI.
+
+## Concurrency
+
+The tool is now just a local single user setup.  To make it more of a shared system would take some concurency hancling
+
+## Security
+
+Moving to a multi-user setup would also require at least authentication, and probably a more thoughtful look at the security.
