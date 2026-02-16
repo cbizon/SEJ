@@ -27,6 +27,11 @@
         button { cursor: pointer; padding: 4px 10px; }
         .placeholder { color: #6c757d; font-style: italic; }
         #people-section, #projects-section { display: none; }
+        .tabulator-calcs-bottom .tabulator-cell {
+            font-weight: bold !important;
+            background-color: #e9ecef !important;
+        }
+        .tabulator-calcs-bottom { border-top: 2px solid #495057 !important; }
     </style>
 </head>
 <body>
@@ -68,6 +73,7 @@
     <script>
         let peopleTable = null;
         let projectsTable = null;
+        let currentTotals = {};
 
         function pctFormatter(cell) {
             const v = cell.getValue();
@@ -104,9 +110,20 @@
         }
 
         function initTables(months, people, projects) {
+            const totalRow = people.find(r => r.name === "Total");
+            const peopleData = people.filter(r => r.name !== "Total");
+            currentTotals = totalRow || {};
+
             const peopleColDefs = [
-                { title: "Name", field: "name", headerFilter: "input", frozen: true },
-                ...months.map(monthColDef),
+                {
+                    title: "Name", field: "name", headerFilter: "input", frozen: true,
+                    bottomCalc: () => "Total",
+                },
+                ...months.map(m => ({
+                    ...monthColDef(m),
+                    bottomCalc: () => currentTotals[m],
+                    bottomCalcFormatter: pctFormatter,
+                })),
             ];
             const projectColDefs = [
                 { title: "Project", field: "project_code", headerFilter: "input" },
@@ -115,17 +132,9 @@
             ];
 
             peopleTable = new Tabulator("#people-table", {
-                data: people,
+                data: peopleData,
                 columns: peopleColDefs,
                 layout: "fitDataFill",
-                rowFormatter: row => {
-                    if (row.getData().name === "Total") {
-                        const el = row.getElement();
-                        el.style.fontWeight = "bold";
-                        el.style.borderTop = "2px solid #495057";
-                        el.style.backgroundColor = "#e9ecef";
-                    }
-                },
             });
 
             projectsTable = new Tabulator("#projects-table", {
@@ -160,7 +169,9 @@
                     if (peopleTable === null) {
                         initTables(months, people, projects);
                     } else {
-                        peopleTable.setData(people);
+                        currentTotals = people.find(r => r.name === "Total") || {};
+                        peopleTable.setData(people.filter(r => r.name !== "Total"));
+                        peopleTable.recalc();
                         projectsTable.setData(projects);
                     }
                 })

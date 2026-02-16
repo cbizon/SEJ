@@ -22,6 +22,11 @@
         .col-dropdown.open { display: block; }
         .col-dropdown label { display: block; cursor: pointer; padding: 3px 0; white-space: nowrap; }
         button { cursor: pointer; padding: 4px 10px; }
+        .tabulator-calcs-bottom .tabulator-cell {
+            font-weight: bold !important;
+            background-color: #e9ecef !important;
+        }
+        .tabulator-calcs-bottom { border-top: 2px solid #495057 !important; }
     </style>
 </head>
 <body>
@@ -47,6 +52,9 @@
         fetch("/api/nonproject-by-group")
             .then(r => r.json())
             .then(({months, rows}) => {
+                const totalRow = rows.find(r => r.group === "Total");
+                const dataRows = rows.filter(r => r.group !== "Total");
+
                 const colDefs = [
                     { title: "Group", field: "group", headerFilter: "input", frozen: true },
                     ...months.map(m => ({
@@ -56,21 +64,15 @@
                         hozAlign: "right",
                         headerHozAlign: "right",
                         formatter: pctFormatter,
+                        bottomCalc: totalRow ? () => totalRow[m] : undefined,
+                        bottomCalcFormatter: pctFormatter,
                     }))
                 ];
 
                 const table = new Tabulator("#table", {
-                    data: rows,
+                    data: dataRows,
                     columns: colDefs,
                     layout: "fitDataFill",
-                    rowFormatter: row => {
-                        if (row.getData().group === "Total") {
-                            const el = row.getElement();
-                            el.style.fontWeight = "bold";
-                            el.style.borderTop = "2px solid #495057";
-                            el.style.backgroundColor = "#e9ecef";
-                        }
-                    },
                 });
 
                 const btn = document.getElementById("col-btn");
