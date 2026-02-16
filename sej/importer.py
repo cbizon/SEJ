@@ -66,6 +66,8 @@ def load_tsv(tsv_path: str | Path, db_path: str | Path) -> None:
         db_path:  Path to the SQLite database file (created if absent).
     """
     tsv_path = Path(tsv_path)
+    db_path = Path(db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection(db_path)
     create_schema(conn)
     _clear_data(conn)
@@ -211,7 +213,7 @@ def main():
     if len(sys.argv) < 2 or len(sys.argv) > 3:
         sys.exit("Usage: sej-load TSV_PATH [DB_PATH]")
     tsv_path = Path(sys.argv[1])
-    db_path = Path(sys.argv[2]) if len(sys.argv) == 3 else tsv_path.with_suffix(".db")
+    db_path = Path(sys.argv[2]) if len(sys.argv) == 3 else Path("data/sej.db")
     result = load_tsv_as_branch(tsv_path, db_path)
     if result == db_path:
         print(f"Loaded {tsv_path} → {db_path}")

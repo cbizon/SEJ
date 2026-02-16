@@ -1,9 +1,11 @@
 """Flask web application for viewing and editing effort allocation data."""
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
 
+from sej.branch import create_branch, merge_branch, delete_branch, list_branches
 from sej.queries import (
     get_spreadsheet_rows,
     get_spreadsheet_rows_with_ids,
@@ -12,7 +14,17 @@ from sej.queries import (
     get_branch_info,
     update_effort,
     add_allocation_line,
+    fix_totals,
 )
+
+
+def _resolve_db(app):
+    """Return the active DB path: the branch DB if one exists, else main."""
+    main = app.config["MAIN_DB_PATH"]
+    branches = list_branches(main)
+    if branches:
+        return branches[0]["path"]
+    return main
 
 
 def create_app(db_path=None):
@@ -20,12 +32,14 @@ def create_app(db_path=None):
 
     Args:
         db_path: Path to the SQLite database.  Defaults to
-                 ``IET_2_8_26_anon.db`` in the current working directory.
+                 ``data/sej.db`` relative to the current working directory.
     """
     if db_path is None:
-        db_path = Path("IET_2_8_26_anon.db")
+        db_path = Path("data/sej.db")
 
     app = Flask(__name__)
+    app.config["MAIN_DB_PATH"] = str(db_path)
+    # Keep DB_PATH for backwards compatibility — it's the active DB
     app.config["DB_PATH"] = str(db_path)
 
     @app.route("/")
@@ -34,7 +48,7 @@ def create_app(db_path=None):
 
     @app.route("/api/data")
     def api_data():
-        db = app.config["DB_PATH"]
+        db = _resolve_db(app)
         info = get_branch_info(db)
         is_branch = info.get("db_role") == "branch"
 
@@ -53,19 +67,19 @@ def create_app(db_path=None):
 
     @app.route("/api/branch")
     def api_branch():
-        return jsonify(get_branch_info(app.config["DB_PATH"]))
+        return jsonify(get_branch_info(_resolve_db(app)))
 
     @app.route("/api/employees")
     def api_employees():
-        return jsonify(get_employees(app.config["DB_PATH"]))
+        return jsonify(get_employees(_resolve_db(app)))
 
     @app.route("/api/projects")
     def api_projects():
-        return jsonify(get_projects(app.config["DB_PATH"]))
+        return jsonify(get_projects(_resolve_db(app)))
 
     @app.route("/api/effort", methods=["PUT"])
     def api_update_effort():
-        db = app.config["DB_PATH"]
+        db = _resolve_db(app)
         info = get_branch_info(db)
         if info.get("db_role") != "branch":
             return jsonify({"error": "Editing is only allowed on branch databases"}), 403
@@ -92,7 +106,7 @@ def create_app(db_path=None):
 
     @app.route("/api/allocation_line", methods=["POST"])
     def api_add_allocation_line():
-        db = app.config["DB_PATH"]
+        db = _resolve_db(app)
         info = get_branch_info(db)
         if info.get("db_role") != "branch":
             return jsonify({"error": "Editing is only allowed on branch databases"}), 403
@@ -111,6 +125,50 @@ def create_app(db_path=None):
         line_id = add_allocation_line(db, employee_name, project_code, project_name)
         return jsonify({"allocation_line_id": line_id})
 
+    @app.route("/api/fix-totals", methods=["POST"])
+    def api_fix_totals():
+        db = _resolve_db(app)
+        info = get_branch_info(db)
+        if info.get("db_role") != "branch":
+            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+        changes = fix_totals(db)
+        return jsonify({"changes": changes})
+
+    @app.route("/api/branch/create", methods=["POST"])
+    def api_branch_create():
+        main = app.config["MAIN_DB_PATH"]
+        if list_branches(main):
+            return jsonify({"error": "A branch already exists. Merge or discard it first."}), 409
+
+        name = datetime.now(timezone.utc).strftime("edit-%Y%m%d-%H%M%S")
+        create_branch(main, name)
+        return jsonify({"branch_name": name})
+
+    @app.route("/api/branch/merge", methods=["POST"])
+    def api_branch_merge():
+        main = app.config["MAIN_DB_PATH"]
+        branches = list_branches(main)
+        if not branches:
+            return jsonify({"error": "No active branch to merge."}), 409
+
+        branch_name = branches[0]["name"]
+        tsv_path = merge_branch(main, branch_name)
+        return jsonify({
+            "merged": branch_name,
+            "changes_file": str(tsv_path) if tsv_path else None,
+        })
+
+    @app.route("/api/branch/discard", methods=["POST"])
+    def api_branch_discard():
+        main = app.config["MAIN_DB_PATH"]
+        branches = list_branches(main)
+        if not branches:
+            return jsonify({"error": "No active branch to discard."}), 409
+
+        branch_name = branches[0]["name"]
+        delete_branch(main, branch_name)
+        return jsonify({"discarded": branch_name})
+
     return app
 
 
@@ -122,7 +180,7 @@ def main():
     # Expect at most one optional positional argument: DB_PATH
     if len(sys.argv) > 2:
         sys.exit("Usage: sej-web [DB_PATH]")
-    db_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("IET_2_8_26_anon.db")
+    db_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("data/sej.db")
 
     if not db_path.exists():
         sys.exit(f"Error: database file not found: {db_path}\nRun load_tsv() first to populate the database.")

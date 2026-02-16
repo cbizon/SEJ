@@ -233,7 +233,9 @@ def merge_branch(main_db_path: str | Path, branch_name: str) -> Path | None:
 
     tsv_path = None
     if changes:
-        tsv_path = main_db_path.parent / f"merge_{branch_name}_{timestamp}.tsv"
+        merges_dir = main_db_path.parent / "merges"
+        merges_dir.mkdir(exist_ok=True)
+        tsv_path = merges_dir / f"merge_{branch_name}_{timestamp}.tsv"
         with open(tsv_path, "w", newline="", encoding="utf-8") as fh:
             fh.write("type\temployee\tproject_code\tyear\tmonth\told_value\tnew_value\n")
             for c in changes:
@@ -247,7 +249,9 @@ def merge_branch(main_db_path: str | Path, branch_name: str) -> Path | None:
                 fh.write(f"{ctype}\t{c['employee']}\t{c['project_code']}\t{year}\t{month}\t{old_str}\t{new_str}\n")
 
     # Back up main before replacing
-    backup_path = main_db_path.parent / f"{main_db_path.stem}_backup_{timestamp}{main_db_path.suffix}"
+    backups_dir = main_db_path.parent / "backups"
+    backups_dir.mkdir(exist_ok=True)
+    backup_path = backups_dir / f"{main_db_path.stem}_backup_{timestamp}{main_db_path.suffix}"
     shutil.copy2(main_db_path, backup_path)
 
     # Carry main's audit log into the branch DB before it becomes main.
@@ -298,9 +302,12 @@ def list_backups(main_db_path: str | Path) -> list[dict]:
     Each entry has keys: path, timestamp (str parsed from filename).
     """
     main_db_path = Path(main_db_path)
+    backups_dir = main_db_path.parent / "backups"
+    if not backups_dir.exists():
+        return []
     pattern = f"{main_db_path.stem}_backup_*{main_db_path.suffix}"
     backups = []
-    for p in sorted(main_db_path.parent.glob(pattern), reverse=True):
+    for p in sorted(backups_dir.glob(pattern), reverse=True):
         # Extract timestamp from filename: stem_backup_YYYYMMDD_HHMMSS
         stem = p.stem  # e.g. "sej_backup_20260215_143000"
         prefix = f"{main_db_path.stem}_backup_"
@@ -398,7 +405,7 @@ def main():
             result.append(a)
         return result
 
-    default_db = "sej.db"
+    default_db = "data/sej.db"
 
     if command == "create":
         positional = _positional()
