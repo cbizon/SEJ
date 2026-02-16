@@ -113,7 +113,7 @@ Records significant operations: loads, branch creation, merges, and deletions.
 |--------|------|-------------|
 | `id` | integer | PK |
 | `timestamp` | text | NOT NULL, ISO-8601 |
-| `action` | text | NOT NULL — `load`, `branch_create`, `merge`, `branch_delete` |
+| `action` | text | NOT NULL — `load`, `branch_create`, `merge`, `branch_delete`, `revert` |
 | `details` | text | JSON blob with context (branch name, TSV path, etc.) |
 
 ---

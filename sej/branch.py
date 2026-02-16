@@ -5,15 +5,29 @@ edit it via the web UI, then merge it back to main (producing a change-log TSV).
 """
 
 import json
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sej.db import get_connection
+from sej.db import create_schema, get_connection
+
+_BRANCH_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _validate_branch_name(name: str) -> str:
+    """Validate that a branch name is safe for use in filenames."""
+    if not _BRANCH_NAME_RE.fullmatch(name):
+        raise ValueError(
+            f"Invalid branch name {name!r}. "
+            "Allowed characters: letters, digits, underscore, hyphen."
+        )
+    return name
 
 
 def branch_db_path(main_db_path: str | Path, branch_name: str) -> Path:
     """Return the file path for a branch database."""
+    _validate_branch_name(branch_name)
     main = Path(main_db_path)
     return main.parent / f"{main.stem}_branch_{branch_name}{main.suffix}"
 
@@ -51,6 +65,7 @@ def create_branch(main_db_path: str | Path, branch_name: str) -> Path:
 
     # Mark the branch copy
     conn = get_connection(dest)
+    create_schema(conn)
     _set_meta(conn, "db_role", "branch")
     _set_meta(conn, "branch_name", branch_name)
     _set_meta(conn, "source_db", str(main_db_path))
@@ -59,6 +74,7 @@ def create_branch(main_db_path: str | Path, branch_name: str) -> Path:
 
     # Log in main
     conn = get_connection(main_db_path)
+    create_schema(conn)
     _log_audit(conn, "branch_create", {"branch_name": branch_name, "branch_path": str(dest)})
     conn.commit()
     conn.close()
@@ -76,6 +92,7 @@ def list_branches(main_db_path: str | Path) -> list[dict]:
     branches = []
     for p in sorted(main_db_path.parent.glob(pattern)):
         conn = get_connection(p)
+        create_schema(conn)
         name = _get_meta(conn, "branch_name")
         conn.close()
         if name:
@@ -93,6 +110,7 @@ def delete_branch(main_db_path: str | Path, branch_name: str) -> None:
     dest.unlink()
 
     conn = get_connection(main_db_path)
+    create_schema(conn)
     _log_audit(conn, "branch_delete", {"branch_name": branch_name})
     conn.commit()
     conn.close()
@@ -101,8 +119,11 @@ def delete_branch(main_db_path: str | Path, branch_name: str) -> None:
 def diff_databases(main_db_path: str | Path, branch_db_path_: str | Path) -> list[dict]:
     """Compare two databases and return a list of change records.
 
-    Each record is a dict with keys:
-        employee, project_code, year, month, old_value, new_value
+    Each record is a dict with:
+        type: "effort_changed" | "effort_added" | "effort_removed" |
+              "allocation_line_added" | "allocation_line_removed"
+        employee, project_code, year (optional), month (optional),
+        old_value (optional), new_value (optional)
     """
     def _get_efforts(db_path):
         conn = get_connection(db_path)
@@ -120,17 +141,39 @@ def diff_databases(main_db_path: str | Path, branch_db_path_: str | Path) -> lis
             result[key] = r["percentage"]
         return result
 
+    def _get_allocation_lines(db_path):
+        conn = get_connection(db_path)
+        rows = conn.execute("""
+            SELECT emp.name AS employee, p.project_code
+            FROM allocation_lines al
+            JOIN employees emp ON emp.id = al.employee_id
+            JOIN projects p ON p.id = al.project_id
+        """).fetchall()
+        conn.close()
+        # Use a counter since same employee+project can have multiple lines
+        from collections import Counter
+        return Counter((r["employee"], r["project_code"]) for r in rows)
+
+    changes = []
+
+    # Diff efforts
     main_efforts = _get_efforts(main_db_path)
     branch_efforts = _get_efforts(branch_db_path_)
 
     all_keys = set(main_efforts.keys()) | set(branch_efforts.keys())
-    changes = []
     for key in sorted(all_keys):
         old = main_efforts.get(key)
         new = branch_efforts.get(key)
         if old != new:
             employee, project_code, year, month = key
+            if old is None:
+                change_type = "effort_added"
+            elif new is None:
+                change_type = "effort_removed"
+            else:
+                change_type = "effort_changed"
             changes.append({
+                "type": change_type,
                 "employee": employee,
                 "project_code": project_code,
                 "year": year,
@@ -138,6 +181,32 @@ def diff_databases(main_db_path: str | Path, branch_db_path_: str | Path) -> lis
                 "old_value": old,
                 "new_value": new,
             })
+
+    # Diff allocation lines (detect structural adds/removes)
+    main_lines = _get_allocation_lines(main_db_path)
+    branch_lines = _get_allocation_lines(branch_db_path_)
+
+    all_line_keys = set(main_lines.keys()) | set(branch_lines.keys())
+    for key in sorted(all_line_keys):
+        main_count = main_lines.get(key, 0)
+        branch_count = branch_lines.get(key, 0)
+        diff = branch_count - main_count
+        employee, project_code = key
+        if diff > 0:
+            for _ in range(diff):
+                changes.append({
+                    "type": "allocation_line_added",
+                    "employee": employee,
+                    "project_code": project_code,
+                })
+        elif diff < 0:
+            for _ in range(-diff):
+                changes.append({
+                    "type": "allocation_line_removed",
+                    "employee": employee,
+                    "project_code": project_code,
+                })
+
     return changes
 
 
@@ -166,15 +235,42 @@ def merge_branch(main_db_path: str | Path, branch_name: str) -> Path | None:
     if changes:
         tsv_path = main_db_path.parent / f"merge_{branch_name}_{timestamp}.tsv"
         with open(tsv_path, "w", newline="", encoding="utf-8") as fh:
-            fh.write("employee\tproject_code\tyear\tmonth\told_value\tnew_value\n")
+            fh.write("type\temployee\tproject_code\tyear\tmonth\told_value\tnew_value\n")
             for c in changes:
-                old_str = f"{c['old_value']:.2f}" if c["old_value"] is not None else ""
-                new_str = f"{c['new_value']:.2f}" if c["new_value"] is not None else ""
-                fh.write(f"{c['employee']}\t{c['project_code']}\t{c['year']}\t{c['month']}\t{old_str}\t{new_str}\n")
+                ctype = c["type"]
+                year = c.get("year", "")
+                month = c.get("month", "")
+                old_val = c.get("old_value")
+                new_val = c.get("new_value")
+                old_str = f"{old_val:.2f}" if old_val is not None else ""
+                new_str = f"{new_val:.2f}" if new_val is not None else ""
+                fh.write(f"{ctype}\t{c['employee']}\t{c['project_code']}\t{year}\t{month}\t{old_str}\t{new_str}\n")
 
     # Back up main before replacing
     backup_path = main_db_path.parent / f"{main_db_path.stem}_backup_{timestamp}{main_db_path.suffix}"
     shutil.copy2(main_db_path, backup_path)
+
+    # Carry main's audit log into the branch DB before it becomes main.
+    # The branch was copied before audit entries were written to main
+    # (e.g. branch_create), so those would be lost on file replacement.
+    main_conn = get_connection(main_db_path)
+    create_schema(main_conn)
+    main_audit_rows = main_conn.execute(
+        "SELECT timestamp, action, details FROM audit_log ORDER BY id"
+    ).fetchall()
+    main_conn.close()
+
+    branch_conn = get_connection(branch_path)
+    create_schema(branch_conn)
+    # Clear branch audit log and replace with main's (authoritative)
+    branch_conn.execute("DELETE FROM audit_log")
+    for row in main_audit_rows:
+        branch_conn.execute(
+            "INSERT INTO audit_log (timestamp, action, details) VALUES (?, ?, ?)",
+            (row["timestamp"], row["action"], row["details"]),
+        )
+    branch_conn.commit()
+    branch_conn.close()
 
     # Replace main with branch (atomic on same filesystem)
     branch_path.replace(main_db_path)

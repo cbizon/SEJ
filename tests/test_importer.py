@@ -132,6 +132,21 @@ def test_project_name_populated(tmp):
     assert project["name"] == "The Big Project"
 
 
+def test_load_logs_audit(tmp):
+    tsv = _tsv(tmp)
+    write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project", "50.00%", "60.00%"],
+    ])
+    load_tsv(tsv, _db(tmp))
+
+    from sej.db import get_connection
+    conn = get_connection(_db(tmp))
+    log = conn.execute("SELECT * FROM audit_log WHERE action='load'").fetchone()
+    conn.close()
+    assert log is not None
+
+
 def test_load_as_branch_bootstrap(tmp):
     """First load goes directly into main when DB doesn't exist."""
     tsv = _tsv(tmp)

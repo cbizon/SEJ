@@ -8,6 +8,7 @@ import pytest
 from sej.db import get_connection, create_schema
 from sej.importer import load_tsv
 from sej.branch import (
+    _validate_branch_name,
     branch_db_path,
     create_branch,
     list_branches,
@@ -59,6 +60,25 @@ def main_db(tmp_path):
 def test_branch_db_path():
     p = branch_db_path("/data/sej.db", "edits")
     assert p == Path("/data/sej_branch_edits.db")
+
+
+def test_branch_name_validation_accepts_valid():
+    _validate_branch_name("my-branch_123")
+
+
+def test_branch_name_validation_rejects_path_traversal():
+    with pytest.raises(ValueError, match="Invalid branch name"):
+        _validate_branch_name("../evil")
+
+
+def test_branch_name_validation_rejects_spaces():
+    with pytest.raises(ValueError, match="Invalid branch name"):
+        _validate_branch_name("has spaces")
+
+
+def test_branch_name_validation_rejects_slashes():
+    with pytest.raises(ValueError, match="Invalid branch name"):
+        _validate_branch_name("sub/dir")
 
 
 def test_create_branch(main_db):
@@ -150,10 +170,11 @@ def test_diff_detects_changed_value(main_db):
     conn.close()
 
     changes = diff_databases(main_db, dest)
-    assert len(changes) == 1
-    assert changes[0]["employee"] == "Smith,Jane"
-    assert changes[0]["old_value"] == 50.0
-    assert changes[0]["new_value"] == 75.0
+    effort_changes = [c for c in changes if c["type"] == "effort_changed"]
+    assert len(effort_changes) == 1
+    assert effort_changes[0]["employee"] == "Smith,Jane"
+    assert effort_changes[0]["old_value"] == 50.0
+    assert effort_changes[0]["new_value"] == 75.0
 
 
 def test_diff_detects_added_effort(main_db):
@@ -174,9 +195,10 @@ def test_diff_detects_added_effort(main_db):
     conn.close()
 
     changes = diff_databases(main_db, dest)
-    assert len(changes) == 1
-    assert changes[0]["old_value"] is None
-    assert changes[0]["new_value"] == 30.0
+    effort_adds = [c for c in changes if c["type"] == "effort_added"]
+    assert len(effort_adds) == 1
+    assert effort_adds[0]["old_value"] is None
+    assert effort_adds[0]["new_value"] == 30.0
 
 
 def test_diff_detects_removed_effort(main_db):
@@ -195,9 +217,26 @@ def test_diff_detects_removed_effort(main_db):
     conn.close()
 
     changes = diff_databases(main_db, dest)
-    assert len(changes) == 1
-    assert changes[0]["old_value"] == 100.0
-    assert changes[0]["new_value"] is None
+    effort_removes = [c for c in changes if c["type"] == "effort_removed"]
+    assert len(effort_removes) == 1
+    assert effort_removes[0]["old_value"] == 100.0
+    assert effort_removes[0]["new_value"] is None
+
+
+def test_diff_detects_added_allocation_line(main_db):
+    dest = create_branch(main_db, "new_line")
+    conn = get_connection(dest)
+    emp_id = conn.execute("SELECT id FROM employees WHERE name = 'Smith,Jane'").fetchone()[0]
+    proj_id = conn.execute("SELECT id FROM projects WHERE project_code = '5120001'").fetchone()[0]
+    conn.execute("INSERT INTO allocation_lines (employee_id, project_id) VALUES (?, ?)", (emp_id, proj_id))
+    conn.commit()
+    conn.close()
+
+    changes = diff_databases(main_db, dest)
+    line_adds = [c for c in changes if c["type"] == "allocation_line_added"]
+    assert len(line_adds) == 1
+    assert line_adds[0]["employee"] == "Smith,Jane"
+    assert line_adds[0]["project_code"] == "5120001"
 
 
 def test_merge_produces_tsv(main_db):
@@ -223,6 +262,7 @@ def test_merge_produces_tsv(main_db):
         reader = csv.DictReader(fh, delimiter="\t")
         rows = list(reader)
     assert len(rows) == 1
+    assert rows[0]["type"] == "effort_changed"
     assert rows[0]["employee"] == "Smith,Jane"
     assert rows[0]["old_value"] == "50.00"
     assert rows[0]["new_value"] == "80.00"
@@ -283,6 +323,27 @@ def test_merge_logs_audit(main_db):
     assert log is not None
     details = json.loads(log["details"])
     assert details["branch_name"] == "audit_merge"
+
+
+def test_merge_preserves_main_audit_log(main_db):
+    """Audit entries written to main after branch creation should survive merge."""
+    create_branch(main_db, "audit_preserve")
+
+    # Main's audit log now has the branch_create entry
+    conn = get_connection(main_db)
+    pre_merge_count = conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0]
+    conn.close()
+    assert pre_merge_count > 0
+
+    merge_branch(main_db, "audit_preserve")
+
+    # After merge, main should still have the branch_create entry + the merge entry
+    conn = get_connection(main_db)
+    entries = conn.execute("SELECT action FROM audit_log ORDER BY id").fetchall()
+    conn.close()
+    actions = [e["action"] for e in entries]
+    assert "branch_create" in actions
+    assert "merge" in actions
 
 
 def test_merge_nonexistent_raises(main_db):

@@ -198,6 +198,17 @@ def test_api_effort_update(branch_client, branch_db):
     assert effort["percentage"] == 80.0
 
 
+def test_api_effort_missing_json(branch_client):
+    resp = branch_client.put("/api/effort", data="not json",
+                             content_type="text/plain")
+    assert resp.status_code == 400
+
+
+def test_api_effort_missing_fields(branch_client):
+    resp = branch_client.put("/api/effort", json={"allocation_line_id": 1})
+    assert resp.status_code == 400
+
+
 def test_api_effort_invalid_percentage(branch_client):
     payload = branch_client.get("/api/data").json
     line_id = payload["data"][0]["allocation_line_id"]

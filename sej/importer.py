@@ -5,7 +5,8 @@ For subsequent loads, data is loaded into a branch that can be merged.
 """
 
 import csv
-from datetime import datetime
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sej.db import create_schema, get_connection
@@ -162,6 +163,11 @@ def load_tsv(tsv_path: str | Path, db_path: str | Path) -> None:
                     (line_id, year, month, pct),
                 )
 
+    conn.execute(
+        "INSERT INTO audit_log (timestamp, action, details) VALUES (?, ?, ?)",
+        (datetime.now(timezone.utc).isoformat(), "load",
+         json.dumps({"tsv_path": str(tsv_path)})),
+    )
     conn.commit()
     conn.close()
 

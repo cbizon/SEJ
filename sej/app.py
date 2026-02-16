@@ -15,13 +15,6 @@ from sej.queries import (
 )
 
 
-def _parse_month_label(label: str) -> tuple[int, int]:
-    """Parse 'July 2025' into (2025, 7)."""
-    from datetime import datetime
-    dt = datetime.strptime(label, "%B %Y")
-    return dt.year, dt.month
-
-
 def create_app(db_path=None):
     """Application factory.
 
@@ -77,10 +70,16 @@ def create_app(db_path=None):
         if info.get("db_role") != "branch":
             return jsonify({"error": "Editing is only allowed on branch databases"}), 403
 
-        body = request.get_json()
-        allocation_line_id = body["allocation_line_id"]
-        year = body["year"]
-        month = body["month"]
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "Request body must be JSON"}), 400
+        for key in ("allocation_line_id", "year", "month"):
+            if key not in body:
+                return jsonify({"error": f"Missing required field: {key}"}), 400
+
+        allocation_line_id = int(body["allocation_line_id"])
+        year = int(body["year"])
+        month = int(body["month"])
         percentage = body.get("percentage")
 
         if percentage is not None:
@@ -98,7 +97,13 @@ def create_app(db_path=None):
         if info.get("db_role") != "branch":
             return jsonify({"error": "Editing is only allowed on branch databases"}), 403
 
-        body = request.get_json()
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "Request body must be JSON"}), 400
+        for key in ("employee_name", "project_code"):
+            if key not in body:
+                return jsonify({"error": f"Missing required field: {key}"}), 400
+
         employee_name = body["employee_name"]
         project_code = body["project_code"]
         project_name = body.get("project_name")
