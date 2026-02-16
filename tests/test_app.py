@@ -999,3 +999,135 @@ def test_api_group_details_total_row_matches_group_np(main_client):
     total = next(r for r in data["people"] if r["name"] == "Total")
     for month in data["months"]:
         assert total[month] == 0.0
+
+
+# --- Non-Project by Person report tests ---
+
+def test_report_nonproject_by_person_page_returns_200(main_client):
+    resp = main_client.get("/reports/nonproject-by-person")
+    assert resp.status_code == 200
+
+
+def test_api_nonproject_by_person_structure(main_client):
+    resp = main_client.get("/api/nonproject-by-person")
+    assert resp.status_code == 200
+    data = resp.json
+    assert "months" in data
+    assert "rows" in data
+    assert isinstance(data["months"], list)
+    assert isinstance(data["rows"], list)
+
+
+def test_api_nonproject_by_person_contains_people(main_client):
+    data = main_client.get("/api/nonproject-by-person").json
+    names = [r["name"] for r in data["rows"]]
+    assert "Smith,Jane" in names
+    assert "Jones,Bob" in names
+
+
+def test_api_nonproject_by_person_includes_group(main_client):
+    data = main_client.get("/api/nonproject-by-person").json
+    jane = next(r for r in data["rows"] if r["name"] == "Smith,Jane")
+    assert jane["group"] == "Engineering"
+    bob = next(r for r in data["rows"] if r["name"] == "Jones,Bob")
+    assert bob["group"] == "Ops"
+
+
+def test_api_nonproject_by_person_bob_is_100pct(main_client):
+    # Jones,Bob (Ops) is 100% Non-Project every month
+    data = main_client.get("/api/nonproject-by-person").json
+    bob = next(r for r in data["rows"] if r["name"] == "Jones,Bob")
+    for month in data["months"]:
+        assert abs(bob[month] - 100.0) < 0.1, f"Jones,Bob {month}: expected 100%, got {bob[month]}"
+
+
+def test_api_nonproject_by_person_jane_is_0pct(main_client):
+    # Smith,Jane (Engineering) has no Non-Project effort
+    data = main_client.get("/api/nonproject-by-person").json
+    jane = next(r for r in data["rows"] if r["name"] == "Smith,Jane")
+    for month in data["months"]:
+        assert jane[month] == 0.0, f"Smith,Jane {month}: expected 0%, got {jane[month]}"
+
+
+def test_api_nonproject_by_person_has_total_row(main_client):
+    data = main_client.get("/api/nonproject-by-person").json
+    assert data["rows"][-1]["name"] == "Total"
+
+
+def test_api_nonproject_by_person_total_correct(main_client):
+    # Jones,Bob: 100% NP; Smith,Jane: 0% NP; combined = 50% NP
+    data = main_client.get("/api/nonproject-by-person").json
+    total = data["rows"][-1]
+    for month in data["months"]:
+        assert abs(total[month] - 50.0) < 0.1, (
+            f"Total {month}: expected 50%, got {total[month]}"
+        )
+
+
+# --- Project Details report tests ---
+
+def test_report_project_details_page_returns_200(main_client):
+    resp = main_client.get("/reports/project-details")
+    assert resp.status_code == 200
+
+
+def test_api_project_details_missing_param(main_client):
+    resp = main_client.get("/api/project-details")
+    assert resp.status_code == 400
+
+
+def test_api_project_details_structure(main_client):
+    resp = main_client.get("/api/project-details?project=5120001")
+    assert resp.status_code == 200
+    data = resp.json
+    assert "months" in data
+    assert "fte" in data
+    assert "people" in data
+
+
+def test_api_project_details_months(main_client):
+    data = main_client.get("/api/project-details?project=5120001").json
+    assert "July 2025" in data["months"]
+    assert "August 2025" in data["months"]
+
+
+def test_api_project_details_fte_label(main_client):
+    data = main_client.get("/api/project-details?project=5120001").json
+    assert data["fte"]["label"] == "Total FTE"
+
+
+def test_api_project_details_fte_values(main_client):
+    # Smith,Jane: 50% on 5120001 in July → FTE = 0.50; 60% in August → FTE = 0.60
+    data = main_client.get("/api/project-details?project=5120001").json
+    assert abs(data["fte"]["July 2025"] - 0.50) < 0.01
+    assert abs(data["fte"]["August 2025"] - 0.60) < 0.01
+
+
+def test_api_project_details_people(main_client):
+    # Only Smith,Jane works on 5120001
+    data = main_client.get("/api/project-details?project=5120001").json
+    names = [r["name"] for r in data["people"]]
+    assert "Smith,Jane" in names
+    assert "Jones,Bob" not in names
+
+
+def test_api_project_details_person_effort(main_client):
+    # Smith,Jane: 50% in July, 60% in August on 5120001
+    data = main_client.get("/api/project-details?project=5120001").json
+    jane = next(r for r in data["people"] if r["name"] == "Smith,Jane")
+    assert abs(jane["July 2025"] - 50.0) < 0.1
+    assert abs(jane["August 2025"] - 60.0) < 0.1
+
+
+def test_api_project_details_person_group(main_client):
+    data = main_client.get("/api/project-details?project=5120001").json
+    jane = next(r for r in data["people"] if r["name"] == "Smith,Jane")
+    assert jane["group"] == "Engineering"
+
+
+def test_api_project_details_nonproject(main_client):
+    # Jones,Bob is 100% Non-Project → FTE = 1.0 per month
+    data = main_client.get("/api/project-details?project=Non-Project").json
+    assert abs(data["fte"]["July 2025"] - 1.0) < 0.01
+    bob = next(r for r in data["people"] if r["name"] == "Jones,Bob")
+    assert abs(bob["July 2025"] - 100.0) < 0.1
