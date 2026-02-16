@@ -3,94 +3,96 @@
 <head>
     <meta charset="utf-8">
     <title>SEJ - Non-Project by Group</title>
+    <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator.min.css" rel="stylesheet">
     <style>
-        body {
-            font-family: "Segoe UI", Arial, sans-serif;
-            margin: 1rem;
-            background: #f8f9fa;
-        }
+        body { font-family: "Segoe UI", Arial, sans-serif; margin: 1rem; background: #f8f9fa; }
         h1 { margin-bottom: 0.25rem; }
-        nav { margin-bottom: 1rem; }
+        nav { margin-bottom: 0.5rem; }
         nav a { margin-right: 1rem; text-decoration: none; color: #0d6efd; }
         nav a:hover { text-decoration: underline; }
-        p.subtitle { color: #555; margin: 0 0 1rem; font-size: 0.95em; }
-        table {
-            border-collapse: collapse;
-            background: #fff;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+        p.subtitle { color: #555; margin: 0 0 0.75rem; font-size: 0.95em; }
+        #toolbar { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
+        .col-picker { position: relative; display: inline-block; }
+        .col-dropdown {
+            display: none; position: absolute; top: 100%; left: 0;
+            background: #fff; border: 1px solid #ccc; padding: 8px 12px;
+            z-index: 100; min-width: 180px; max-height: 400px; overflow-y: auto;
+            box-shadow: 2px 2px 6px rgba(0,0,0,0.2);
         }
-        th {
-            background: #343a40;
-            color: #fff;
-            padding: 8px 14px;
-            text-align: right;
-            white-space: nowrap;
-            font-size: 0.88em;
-        }
-        th:first-child { text-align: left; }
-        td {
-            padding: 7px 14px;
-            border-bottom: 1px solid #dee2e6;
-            text-align: right;
-            white-space: nowrap;
-            font-size: 0.9em;
-        }
-        td:first-child { text-align: left; font-weight: 600; }
-        tr:last-child td { border-bottom: none; }
-        tr:hover td { background: #f1f3f5; }
-        tr.total-row td {
-            border-top: 2px solid #495057;
-            background: #e9ecef;
-            font-weight: 600;
-        }
-        tr.total-row:hover td { background: #dee2e6; }
-        .loading { color: #6c757d; font-style: italic; }
+        .col-dropdown.open { display: block; }
+        .col-dropdown label { display: block; cursor: pointer; padding: 3px 0; white-space: nowrap; }
+        button { cursor: pointer; padding: 4px 10px; }
     </style>
 </head>
 <body>
     <h1>Non-Project by Group</h1>
-    <nav>
-        <a href="/reports">&larr; Reports</a>
-    </nav>
-    <p class="subtitle">
-        Percentage of each group's total recorded effort that goes to Non-Project (overhead/admin) work, by month.
-    </p>
+    <nav><a href="/reports">&larr; Reports</a></nav>
+    <p class="subtitle">Percentage of each group's total recorded effort that goes to Non-Project (overhead/admin) work, by month.</p>
 
-    <div id="content"><span class="loading">Loading&hellip;</span></div>
+    <div id="toolbar">
+        <div class="col-picker">
+            <button id="col-btn">Columns &#9660;</button>
+            <div id="col-dropdown" class="col-dropdown"></div>
+        </div>
+    </div>
+    <div id="table"></div>
 
+    <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
     <script>
-        function fmt(pct) {
-            if (pct == null) return "";
-            return pct.toFixed(1) + "%";
+        function pctFormatter(cell) {
+            const v = cell.getValue();
+            return (v != null && v !== "") ? v.toFixed(1) + "%" : "";
         }
 
         fetch("/api/nonproject-by-group")
             .then(r => r.json())
             .then(({months, rows}) => {
-                const content = document.getElementById("content");
-                if (!rows.length) {
-                    content.innerHTML = '<p style="color:#6c757d;font-style:italic">No data found.</p>';
-                    return;
-                }
+                const colDefs = [
+                    { title: "Group", field: "group", headerFilter: "input", frozen: true },
+                    ...months.map(m => ({
+                        title: m, field: m,
+                        headerFilter: "input",
+                        sorter: "number",
+                        hozAlign: "right",
+                        headerHozAlign: "right",
+                        formatter: pctFormatter,
+                    }))
+                ];
 
-                const headerCells = ['<th>Group</th>']
-                    .concat(months.map(m => `<th>${m}</th>`))
-                    .join("");
+                const table = new Tabulator("#table", {
+                    data: rows,
+                    columns: colDefs,
+                    layout: "fitDataFill",
+                    height: "75vh",
+                    rowFormatter: row => {
+                        if (row.getData().group === "Total") {
+                            const el = row.getElement();
+                            el.style.fontWeight = "bold";
+                            el.style.borderTop = "2px solid #495057";
+                            el.style.backgroundColor = "#e9ecef";
+                        }
+                    },
+                });
 
-                const bodyRows = rows.map(row => {
-                    const isTotal = row.group === "Total";
-                    const cls = isTotal ? ' class="total-row"' : '';
-                    const cells = [`<td>${row.group}</td>`]
-                        .concat(months.map(m => `<td>${fmt(row[m])}</td>`))
-                        .join("");
-                    return `<tr${cls}>${cells}</tr>`;
-                }).join("");
+                const btn = document.getElementById("col-btn");
+                const dropdown = document.getElementById("col-dropdown");
 
-                content.innerHTML = `
-                    <table>
-                        <thead><tr>${headerCells}</tr></thead>
-                        <tbody>${bodyRows}</tbody>
-                    </table>`;
+                table.on("tableBuilt", () => {
+                    table.getColumns().forEach(col => {
+                        const label = document.createElement("label");
+                        const cb = document.createElement("input");
+                        cb.type = "checkbox";
+                        cb.checked = col.isVisible();
+                        cb.addEventListener("change", () => col.toggle());
+                        label.appendChild(cb);
+                        label.appendChild(document.createTextNode("\u00a0" + col.getDefinition().title));
+                        dropdown.appendChild(label);
+                    });
+                });
+
+                btn.addEventListener("click", e => { e.stopPropagation(); dropdown.classList.toggle("open"); });
+                dropdown.addEventListener("click", e => e.stopPropagation());
+                document.addEventListener("click", () => dropdown.classList.remove("open"));
             });
     </script>
 </body>

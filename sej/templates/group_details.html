@@ -3,59 +3,35 @@
 <head>
     <meta charset="utf-8">
     <title>SEJ - Group Details</title>
+    <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator.min.css" rel="stylesheet">
     <style>
-        body {
-            font-family: "Segoe UI", Arial, sans-serif;
-            margin: 1rem;
-            background: #f8f9fa;
-        }
+        body { font-family: "Segoe UI", Arial, sans-serif; margin: 1rem; background: #f8f9fa; }
         h1 { margin-bottom: 0.25rem; }
-        nav { margin-bottom: 1rem; }
+        nav { margin-bottom: 0.5rem; }
         nav a { margin-right: 1rem; text-decoration: none; color: #0d6efd; }
         nav a:hover { text-decoration: underline; }
-        .controls { margin-bottom: 1.5rem; }
-        .controls label { font-weight: 600; margin-right: 0.5rem; }
+        .controls { margin-bottom: 1rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .controls label { font-weight: 600; }
         .controls select { padding: 4px 8px; font-size: 1em; }
-        h2 { margin: 1.5rem 0 0.5rem; font-size: 1.1em; color: #343a40; }
-        table {
-            border-collapse: collapse;
-            background: #fff;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
+        h2 { margin: 1.25rem 0 0.4rem; font-size: 1.05em; color: #343a40; }
+        .toolbar { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
+        .col-picker { position: relative; display: inline-block; }
+        .col-dropdown {
+            display: none; position: absolute; top: 100%; left: 0;
+            background: #fff; border: 1px solid #ccc; padding: 8px 12px;
+            z-index: 100; min-width: 180px; max-height: 400px; overflow-y: auto;
+            box-shadow: 2px 2px 6px rgba(0,0,0,0.2);
         }
-        th {
-            background: #343a40;
-            color: #fff;
-            padding: 8px 14px;
-            text-align: right;
-            white-space: nowrap;
-            font-size: 0.88em;
-        }
-        th:first-child, th.name-col { text-align: left; }
-        td {
-            padding: 7px 14px;
-            border-bottom: 1px solid #dee2e6;
-            text-align: right;
-            white-space: nowrap;
-            font-size: 0.9em;
-        }
-        td:first-child { text-align: left; }
-        tr:last-child td { border-bottom: none; }
-        tr:hover td { background: #f1f3f5; }
-        tr.total-row td {
-            border-top: 2px solid #495057;
-            background: #e9ecef;
-            font-weight: 600;
-        }
-        tr.total-row:hover td { background: #dee2e6; }
+        .col-dropdown.open { display: block; }
+        .col-dropdown label { display: block; cursor: pointer; padding: 3px 0; white-space: nowrap; }
+        button { cursor: pointer; padding: 4px 10px; }
         .placeholder { color: #6c757d; font-style: italic; }
+        #people-section, #projects-section { display: none; }
     </style>
 </head>
 <body>
     <h1>Group Details</h1>
-    <nav>
-        <a href="/reports">&larr; Reports</a>
-    </nav>
+    <nav><a href="/reports">&larr; Reports</a></nav>
 
     <div class="controls">
         <label for="group-select">Group:</label>
@@ -64,62 +40,133 @@
         </select>
     </div>
 
-    <div id="content"><p class="placeholder">Select a group above.</p></div>
+    <div id="error" style="display:none;color:#dc3545;font-weight:600"></div>
 
+    <div id="people-section">
+        <h2>Non-Project % by Person</h2>
+        <div class="toolbar">
+            <div class="col-picker">
+                <button id="people-col-btn">Columns &#9660;</button>
+                <div id="people-col-dropdown" class="col-dropdown"></div>
+            </div>
+        </div>
+        <div id="people-table"></div>
+    </div>
+
+    <div id="projects-section">
+        <h2>Total Effort by Project</h2>
+        <div class="toolbar">
+            <div class="col-picker">
+                <button id="projects-col-btn">Columns &#9660;</button>
+                <div id="projects-col-dropdown" class="col-dropdown"></div>
+            </div>
+        </div>
+        <div id="projects-table"></div>
+    </div>
+
+    <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
     <script>
-        function fmt(v) {
-            return v == null ? "" : v.toFixed(1) + "%";
+        let peopleTable = null;
+        let projectsTable = null;
+
+        function pctFormatter(cell) {
+            const v = cell.getValue();
+            return (v != null && v !== "") ? v.toFixed(1) + "%" : "";
         }
 
-        function buildTable(headers, rows, totalRowKey) {
-            const ths = headers.map((h, i) =>
-                `<th${i === 0 ? ' class="name-col"' : ''}>${h}</th>`
-            ).join("");
-
-            const trs = rows.map(row => {
-                const isTotal = totalRowKey && row[totalRowKey] === "Total";
-                const cls = isTotal ? ' class="total-row"' : '';
-                const tds = headers.map(h => {
-                    const v = row[h];
-                    const formatted = (typeof v === 'number') ? fmt(v) : (v ?? "");
-                    return `<td>${formatted}</td>`;
-                }).join("");
-                return `<tr${cls}>${tds}</tr>`;
-            }).join("");
-
-            return `<table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
+        function monthColDef(m) {
+            return {
+                title: m, field: m,
+                headerFilter: "input",
+                sorter: "number",
+                hozAlign: "right",
+                headerHozAlign: "right",
+                formatter: pctFormatter,
+            };
         }
 
-        function render(data) {
-            const { months, people, projects } = data;
+        function setupColPicker(btnId, dropdownId, table) {
+            const btn = document.getElementById(btnId);
+            const dropdown = document.getElementById(dropdownId);
+            dropdown.innerHTML = "";
+            table.getColumns().forEach(col => {
+                const lbl = document.createElement("label");
+                const cb = document.createElement("input");
+                cb.type = "checkbox";
+                cb.checked = col.isVisible();
+                cb.addEventListener("change", () => col.toggle());
+                lbl.appendChild(cb);
+                lbl.appendChild(document.createTextNode("\u00a0" + col.getDefinition().title));
+                dropdown.appendChild(lbl);
+            });
+            btn.addEventListener("click", e => { e.stopPropagation(); dropdown.classList.toggle("open"); });
+            dropdown.addEventListener("click", e => e.stopPropagation());
+        }
 
-            // People table: name + months
-            const peopleHeaders = ["Name"].concat(months);
-            const peopleRows = people.map(r => {
-                const out = { "Name": r.name };
-                months.forEach(m => { out[m] = r[m]; });
-                return out;
+        function initTables(months, people, projects) {
+            const peopleColDefs = [
+                { title: "Name", field: "name", headerFilter: "input", frozen: true },
+                ...months.map(monthColDef),
+            ];
+            const projectColDefs = [
+                { title: "Project", field: "project_code", headerFilter: "input" },
+                { title: "Name", field: "project_name", headerFilter: "input" },
+                ...months.map(monthColDef),
+            ];
+
+            peopleTable = new Tabulator("#people-table", {
+                data: people,
+                columns: peopleColDefs,
+                layout: "fitDataFill",
+                height: "35vh",
+                rowFormatter: row => {
+                    if (row.getData().name === "Total") {
+                        const el = row.getElement();
+                        el.style.fontWeight = "bold";
+                        el.style.borderTop = "2px solid #495057";
+                        el.style.backgroundColor = "#e9ecef";
+                    }
+                },
             });
 
-            // Project table: project code, name, months
-            const projHeaders = ["Project", "Name"].concat(months);
-            const projRows = projects.map(r => {
-                const out = { "Project": r.project_code, "Name": r.project_name };
-                months.forEach(m => { out[m] = r[m]; });
-                return out;
+            projectsTable = new Tabulator("#projects-table", {
+                data: projects,
+                columns: projectColDefs,
+                layout: "fitDataFill",
+                height: "35vh",
             });
 
-            let html = "";
-            html += "<h2>Non-Project % by Person</h2>";
-            html += buildTable(peopleHeaders, peopleRows, "Name");
-            html += "<h2>Total Effort by Project</h2>";
-            if (projRows.length) {
-                html += buildTable(projHeaders, projRows, null);
-            } else {
-                html += '<p class="placeholder">No project effort data for this group.</p>';
-            }
+            peopleTable.on("tableBuilt", () => setupColPicker("people-col-btn", "people-col-dropdown", peopleTable));
+            projectsTable.on("tableBuilt", () => setupColPicker("projects-col-btn", "projects-col-dropdown", projectsTable));
 
-            document.getElementById("content").innerHTML = html;
+            document.getElementById("people-section").style.display = "";
+            document.getElementById("projects-section").style.display = "";
+        }
+
+        function showError(msg) {
+            const el = document.getElementById("error");
+            el.textContent = "Error: " + msg;
+            el.style.display = "";
+        }
+
+        function loadGroup(group) {
+            document.getElementById("error").style.display = "none";
+            if (!group) return;
+
+            fetch(`/api/group-details?group=${encodeURIComponent(group)}`)
+                .then(r => {
+                    if (!r.ok) return r.text().then(t => { throw new Error(`Server error ${r.status}: ${t}`); });
+                    return r.json();
+                })
+                .then(({ months, people, projects }) => {
+                    if (peopleTable === null) {
+                        initTables(months, people, projects);
+                    } else {
+                        peopleTable.setData(people);
+                        projectsTable.setData(projects);
+                    }
+                })
+                .catch(err => showError(err.message));
         }
 
         // Load groups into dropdown
@@ -134,40 +181,16 @@
                     opt.textContent = g;
                     sel.appendChild(opt);
                 });
-
-                // If only one group, select it automatically
                 if (groups.length === 1) {
                     sel.value = groups[0];
                     loadGroup(groups[0]);
                 }
             });
 
-        function showError(msg) {
-            document.getElementById("content").innerHTML =
-                `<p style="color:#dc3545;font-weight:600">Error: ${msg}</p>`;
-        }
+        document.getElementById("group-select").addEventListener("change", e => loadGroup(e.target.value));
 
-        function loadGroup(group) {
-            if (!group) {
-                document.getElementById("content").innerHTML =
-                    '<p class="placeholder">Select a group above.</p>';
-                return;
-            }
-            document.getElementById("content").innerHTML =
-                '<p class="placeholder">Loading&hellip;</p>';
-            fetch(`/api/group-details?group=${encodeURIComponent(group)}`)
-                .then(r => {
-                    if (!r.ok) {
-                        return r.text().then(t => { throw new Error(`Server error ${r.status}: ${t}`); });
-                    }
-                    return r.json();
-                })
-                .then(render)
-                .catch(err => showError(err.message));
-        }
-
-        document.getElementById("group-select").addEventListener("change", e => {
-            loadGroup(e.target.value);
+        document.addEventListener("click", () => {
+            document.querySelectorAll(".col-dropdown").forEach(d => d.classList.remove("open"));
         });
     </script>
 </body>
