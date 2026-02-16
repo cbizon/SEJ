@@ -1,10 +1,18 @@
-"""Flask web application for viewing effort allocation data."""
+"""Flask web application for viewing and editing effort allocation data."""
 
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
-from sej.queries import get_spreadsheet_rows
+from sej.queries import (
+    get_spreadsheet_rows,
+    get_spreadsheet_rows_with_ids,
+    get_employees,
+    get_projects,
+    get_branch_info,
+    update_effort,
+    add_allocation_line,
+)
 
 
 def create_app(db_path=None):
@@ -26,9 +34,82 @@ def create_app(db_path=None):
 
     @app.route("/api/data")
     def api_data():
-        headers, rows = get_spreadsheet_rows(app.config["DB_PATH"])
+        db = app.config["DB_PATH"]
+        info = get_branch_info(db)
+        is_branch = info.get("db_role") == "branch"
+
+        if is_branch:
+            headers, rows = get_spreadsheet_rows_with_ids(db)
+        else:
+            headers, rows = get_spreadsheet_rows(db)
+
         data = [dict(zip(headers, row)) for row in rows]
-        return jsonify({"columns": headers, "data": data})
+        return jsonify({
+            "columns": headers,
+            "data": data,
+            "editable": is_branch,
+            "branch_name": info.get("branch_name"),
+        })
+
+    @app.route("/api/branch")
+    def api_branch():
+        return jsonify(get_branch_info(app.config["DB_PATH"]))
+
+    @app.route("/api/employees")
+    def api_employees():
+        return jsonify(get_employees(app.config["DB_PATH"]))
+
+    @app.route("/api/projects")
+    def api_projects():
+        return jsonify(get_projects(app.config["DB_PATH"]))
+
+    @app.route("/api/effort", methods=["PUT"])
+    def api_update_effort():
+        db = app.config["DB_PATH"]
+        info = get_branch_info(db)
+        if info.get("db_role") != "branch":
+            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "Request body must be JSON"}), 400
+        for key in ("allocation_line_id", "year", "month"):
+            if key not in body:
+                return jsonify({"error": f"Missing required field: {key}"}), 400
+
+        allocation_line_id = int(body["allocation_line_id"])
+        year = int(body["year"])
+        month = int(body["month"])
+        percentage = body.get("percentage")
+
+        if percentage is not None:
+            percentage = float(percentage)
+            if percentage < 0 or percentage > 100:
+                return jsonify({"error": "Percentage must be between 0 and 100"}), 400
+
+        update_effort(db, allocation_line_id, year, month, percentage)
+        return jsonify({"ok": True})
+
+    @app.route("/api/allocation_line", methods=["POST"])
+    def api_add_allocation_line():
+        db = app.config["DB_PATH"]
+        info = get_branch_info(db)
+        if info.get("db_role") != "branch":
+            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "Request body must be JSON"}), 400
+        for key in ("employee_name", "project_code"):
+            if key not in body:
+                return jsonify({"error": f"Missing required field: {key}"}), 400
+
+        employee_name = body["employee_name"]
+        project_code = body["project_code"]
+        project_name = body.get("project_name")
+
+        line_id = add_allocation_line(db, employee_name, project_code, project_name)
+        return jsonify({"allocation_line_id": line_id})
 
     return app
 

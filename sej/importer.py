@@ -1,10 +1,12 @@
 """Import effort allocation data from a TSV file into the SEJ database.
 
-Running the import wipes all existing data and reloads from the given file.
+For the first load (no existing main DB), data is loaded directly.
+For subsequent loads, data is loaded into a branch that can be merged.
 """
 
 import csv
-from datetime import datetime
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sej.db import create_schema, get_connection
@@ -161,8 +163,45 @@ def load_tsv(tsv_path: str | Path, db_path: str | Path) -> None:
                     (line_id, year, month, pct),
                 )
 
+    conn.execute(
+        "INSERT INTO audit_log (timestamp, action, details) VALUES (?, ?, ?)",
+        (datetime.now(timezone.utc).isoformat(), "load",
+         json.dumps({"tsv_path": str(tsv_path)})),
+    )
     conn.commit()
     conn.close()
+
+
+def load_tsv_as_branch(tsv_path: str | Path, main_db_path: str | Path,
+                       branch_name: str | None = None) -> Path:
+    """Load a TSV into a branch database for later merging.
+
+    If the main DB does not exist (bootstrap), loads directly into it and
+    returns the main DB path.  Otherwise, creates a branch and loads into that.
+
+    Args:
+        tsv_path: Path to the input TSV file.
+        main_db_path: Path to the main SQLite database.
+        branch_name: Name for the branch. Defaults to ``load_YYYYMMDD``.
+
+    Returns:
+        The path to the database that was loaded into (main or branch).
+    """
+    from sej.branch import create_branch
+
+    main_db_path = Path(main_db_path)
+
+    if not main_db_path.exists():
+        # Bootstrap: load directly into main
+        load_tsv(tsv_path, main_db_path)
+        return main_db_path
+
+    # Subsequent load: create branch, wipe it, load fresh
+    if branch_name is None:
+        branch_name = f"load_{datetime.now().strftime('%Y%m%d')}"
+    branch_path = create_branch(main_db_path, branch_name)
+    load_tsv(tsv_path, branch_path)
+    return branch_path
 
 
 def main():
@@ -173,5 +212,9 @@ def main():
         sys.exit("Usage: sej-load TSV_PATH [DB_PATH]")
     tsv_path = Path(sys.argv[1])
     db_path = Path(sys.argv[2]) if len(sys.argv) == 3 else tsv_path.with_suffix(".db")
-    load_tsv(tsv_path, db_path)
-    print(f"Loaded {tsv_path} → {db_path}")
+    result = load_tsv_as_branch(tsv_path, db_path)
+    if result == db_path:
+        print(f"Loaded {tsv_path} → {db_path}")
+    else:
+        print(f"Loaded {tsv_path} → branch at {result}")
+        print(f"Run 'sej-branch merge' to apply changes to main.")

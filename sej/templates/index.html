@@ -11,7 +11,16 @@
             background: #f8f9fa;
         }
         h1 { margin-bottom: 0.5rem; }
-        #toolbar { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
+        #branch-banner {
+            display: none;
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 8px 14px;
+            margin-bottom: 0.5rem;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        #toolbar { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         #col-picker { position: relative; display: inline-block; }
         #col-dropdown {
             display: none;
@@ -31,18 +40,88 @@
         #col-dropdown label { display: block; cursor: pointer; padding: 3px 0; white-space: nowrap; }
         button { cursor: pointer; padding: 4px 10px; }
         #show-all-btn.active { background: #0d6efd; color: #fff; border-color: #0d6efd; }
+        #select-mode-btn.active { background: #198754; color: #fff; border-color: #198754; }
+        .cell-selected { outline: 2px solid #198754 !important; outline-offset: -2px; }
+        #selection-toolbar {
+            display: none;
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #fff;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 8px 14px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            z-index: 200;
+            gap: 8px;
+            align-items: center;
+        }
+        #selection-toolbar input {
+            width: 80px;
+            padding: 4px 6px;
+        }
+        #selection-toolbar .count { font-size: 0.9em; color: #666; }
+        /* Add-row modal */
+        #add-row-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.4);
+            z-index: 300;
+            justify-content: center;
+            align-items: center;
+        }
+        #add-row-overlay.open { display: flex; }
+        #add-row-form {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            min-width: 320px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+        #add-row-form label { display: block; margin-top: 10px; font-weight: 600; }
+        #add-row-form input, #add-row-form select { width: 100%; padding: 6px; margin-top: 4px; box-sizing: border-box; }
+        #add-row-form .btn-row { margin-top: 14px; display: flex; gap: 8px; justify-content: flex-end; }
     </style>
 </head>
 <body>
     <h1>Effort Allocations</h1>
+    <div id="branch-banner"></div>
     <div id="toolbar">
         <div id="col-picker">
             <button id="col-btn">Columns &#9660;</button>
             <div id="col-dropdown"></div>
         </div>
         <button id="show-all-btn">Show all rows</button>
+        <button id="select-mode-btn" style="display:none">Selection mode</button>
+        <button id="add-row-btn" style="display:none">Add allocation line</button>
     </div>
     <div id="table"></div>
+
+    <div id="selection-toolbar">
+        <span class="count"><span id="sel-count">0</span> cells selected</span>
+        <input type="number" id="sel-value" placeholder="%" min="0" max="100" step="0.01">
+        <button id="sel-apply">Apply</button>
+        <button id="sel-clear">Clear</button>
+    </div>
+
+    <div id="add-row-overlay">
+        <div id="add-row-form">
+            <h3 style="margin-top:0">Add Allocation Line</h3>
+            <label>Employee</label>
+            <select id="ar-employee"><option value="">Loading...</option></select>
+            <label>Project Code</label>
+            <input id="ar-project-code" list="ar-project-list" placeholder="Type or select">
+            <datalist id="ar-project-list"></datalist>
+            <label>Project Name (for new projects)</label>
+            <input id="ar-project-name" placeholder="Optional">
+            <div class="btn-row">
+                <button id="ar-cancel">Cancel</button>
+                <button id="ar-submit">Add</button>
+            </div>
+        </div>
+    </div>
 
     <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
     <script>
@@ -65,7 +144,15 @@
                    (d.getFullYear() === now.getFullYear() && d.getMonth() < now.getMonth());
         }
 
+        function parseMonthLabel(label) {
+            const d = new Date(label + " 1");
+            return { year: d.getFullYear(), month: d.getMonth() + 1 };
+        }
+
         let showAllRows = false;
+        let selectMode = false;
+        let selectedCells = new Set(); // Set of "lineId|field" strings
+        let selectedElements = new Map(); // "lineId|field" -> DOM element
 
         function applyRowFilter(table) {
             if (showAllRows) {
@@ -82,31 +169,55 @@
             table.setFilter(row => visibleMonthFields.some(f => row[f] !== "" && row[f] != null));
         }
 
+        function computeViolations(data, monthFields) {
+            const violations = new Set();
+            const sums = {};
+            data.forEach(row => {
+                const emp = row["Employee"];
+                if (!sums[emp]) sums[emp] = {};
+                monthFields.forEach(mf => {
+                    const val = row[mf];
+                    const pct = (val !== "" && val != null) ? parseFloat(val) : 0;
+                    sums[emp][mf] = (sums[emp][mf] || 0) + (isNaN(pct) ? 0 : pct);
+                });
+            });
+            Object.entries(sums).forEach(([emp, monthSums]) => {
+                monthFields.forEach(mf => {
+                    if (Math.abs((monthSums[mf] || 0) - 100) > 0.01) {
+                        violations.add(`${emp}|${mf}`);
+                    }
+                });
+            });
+            return violations;
+        }
+
+        function updateSelectionToolbar() {
+            const tb = document.getElementById("selection-toolbar");
+            document.getElementById("sel-count").textContent = selectedCells.size;
+            tb.style.display = selectedCells.size > 0 ? "flex" : "none";
+        }
+
+        function clearSelection() {
+            selectedElements.forEach(el => el.classList.remove("cell-selected"));
+            selectedCells.clear();
+            selectedElements.clear();
+            updateSelectionToolbar();
+        }
+
         fetch("/api/data")
             .then(r => r.json())
-            .then(({columns, data}) => {
-                // Compute per-employee per-month sums to find violations (should be 100).
-                const monthFields = columns.filter(name => monthPattern.test(name));
-                const violations = new Set();
-                if (monthFields.length > 0) {
-                    const sums = {};
-                    data.forEach(row => {
-                        const emp = row["Employee"];
-                        if (!sums[emp]) sums[emp] = {};
-                        monthFields.forEach(mf => {
-                            const val = row[mf];
-                            const pct = (val !== "" && val != null) ? parseFloat(val) : 0;
-                            sums[emp][mf] = (sums[emp][mf] || 0) + (isNaN(pct) ? 0 : pct);
-                        });
-                    });
-                    Object.entries(sums).forEach(([emp, monthSums]) => {
-                        monthFields.forEach(mf => {
-                            if (Math.abs((monthSums[mf] || 0) - 100) > 0.01) {
-                                violations.add(`${emp}|${mf}`);
-                            }
-                        });
-                    });
+            .then(({columns, data, editable, branch_name}) => {
+                // Show branch banner
+                if (editable && branch_name) {
+                    const banner = document.getElementById("branch-banner");
+                    banner.textContent = `Editing branch: ${branch_name}`;
+                    banner.style.display = "block";
+                    document.getElementById("select-mode-btn").style.display = "";
+                    document.getElementById("add-row-btn").style.display = "";
                 }
+
+                const monthFields = columns.filter(name => monthPattern.test(name));
+                let violations = computeViolations(data, monthFields);
 
                 const colDefs = columns.map(name => {
                     const isMonth = monthPattern.test(name);
@@ -115,16 +226,42 @@
                         field: name,
                         headerFilter: "input",
                         sorter: isMonth ? monthSorter : "string",
-                        visible: !hiddenByDefault.has(name) && !isPastMonth(name),
+                        visible: name !== "allocation_line_id" && !hiddenByDefault.has(name) && !isPastMonth(name),
                     };
                     if (isMonth) {
+                        if (editable) {
+                            def.editor = "input";
+                        }
                         def.formatter = (cell) => {
                             const emp = cell.getRow().getData()["Employee"];
                             if (violations.has(`${emp}|${name}`)) {
                                 cell.getElement().style.backgroundColor = "#ffcccc";
+                            } else {
+                                cell.getElement().style.backgroundColor = "";
                             }
                             return cell.getValue() ?? "";
                         };
+                        if (editable) {
+                            def.cellClick = (e, cell) => {
+                                if (!selectMode) return;
+                                e.stopPropagation();
+                                const rowData = cell.getRow().getData();
+                                const lineId = rowData["allocation_line_id"];
+                                const field = cell.getField();
+                                const key = `${lineId}|${field}`;
+                                const el = cell.getElement();
+                                if (selectedCells.has(key)) {
+                                    selectedCells.delete(key);
+                                    selectedElements.delete(key);
+                                    el.classList.remove("cell-selected");
+                                } else {
+                                    selectedCells.add(key);
+                                    selectedElements.set(key, el);
+                                    el.classList.add("cell-selected");
+                                }
+                                updateSelectionToolbar();
+                            };
+                        }
                     }
                     return def;
                 });
@@ -143,11 +280,14 @@
                 const btn = document.getElementById("col-btn");
                 const dropdown = document.getElementById("col-dropdown");
                 const showAllBtn = document.getElementById("show-all-btn");
+                const selectModeBtn = document.getElementById("select-mode-btn");
 
                 table.on("tableBuilt", () => {
                     applyRowFilter(table);
 
                     table.getColumns().forEach(col => {
+                        const field = col.getField();
+                        if (field === "allocation_line_id") return;
                         const label = document.createElement("label");
                         const cb = document.createElement("input");
                         cb.type = "checkbox";
@@ -161,10 +301,188 @@
 
                 table.on("columnVisibilityChanged", () => applyRowFilter(table));
 
+                // Cell edit handler — persist to server
+                if (editable) {
+                    table.on("cellEdited", (cell) => {
+                        const field = cell.getField();
+                        if (!monthPattern.test(field)) return;
+
+                        const rowData = cell.getRow().getData();
+                        const lineId = rowData["allocation_line_id"];
+                        const {year, month} = parseMonthLabel(field);
+                        const raw = cell.getValue();
+                        let pct = null;
+                        if (raw !== "" && raw != null) {
+                            pct = parseFloat(String(raw).replace("%", ""));
+                            if (isNaN(pct)) pct = null;
+                        }
+
+                        fetch("/api/effort", {
+                            method: "PUT",
+                            headers: {"Content-Type": "application/json"},
+                            body: JSON.stringify({
+                                allocation_line_id: lineId,
+                                year: year,
+                                month: month,
+                                percentage: pct,
+                            }),
+                        }).then(r => {
+                            if (!r.ok) r.json().then(d => alert("Error: " + d.error));
+                        });
+
+                        // Update the cell display value
+                        if (pct !== null) {
+                            cell.setValue(pct.toFixed(2) + "%", true);
+                        } else {
+                            cell.setValue("", true);
+                        }
+
+                        // Recompute violations
+                        const allData = table.getData();
+                        violations = computeViolations(allData, monthFields);
+                        table.getRows().forEach(row => {
+                            monthFields.forEach(mf => {
+                                const c = row.getCell(mf);
+                                if (c) c.getElement().style.backgroundColor = "";
+                            });
+                        });
+                        table.getRows().forEach(row => {
+                            const emp = row.getData()["Employee"];
+                            monthFields.forEach(mf => {
+                                if (violations.has(`${emp}|${mf}`)) {
+                                    const c = row.getCell(mf);
+                                    if (c) c.getElement().style.backgroundColor = "#ffcccc";
+                                }
+                            });
+                        });
+                    });
+                }
+
                 showAllBtn.addEventListener("click", () => {
                     showAllRows = !showAllRows;
                     showAllBtn.classList.toggle("active", showAllRows);
                     applyRowFilter(table);
+                });
+
+                // Selection mode
+                selectModeBtn.addEventListener("click", () => {
+                    selectMode = !selectMode;
+                    selectModeBtn.classList.toggle("active", selectMode);
+                    if (!selectMode) clearSelection();
+                });
+
+                // Selection apply
+                document.getElementById("sel-apply").addEventListener("click", () => {
+                    const val = document.getElementById("sel-value").value;
+                    if (val === "") return;
+                    const pct = parseFloat(val);
+                    if (isNaN(pct) || pct < 0 || pct > 100) {
+                        alert("Enter a valid percentage (0-100)");
+                        return;
+                    }
+                    const formatted = pct.toFixed(2) + "%";
+                    const promises = [];
+                    selectedCells.forEach(key => {
+                        const [lineId, field] = key.split("|");
+                        const {year, month} = parseMonthLabel(field);
+                        promises.push(
+                            fetch("/api/effort", {
+                                method: "PUT",
+                                headers: {"Content-Type": "application/json"},
+                                body: JSON.stringify({
+                                    allocation_line_id: parseInt(lineId),
+                                    year, month, percentage: pct,
+                                }),
+                            })
+                        );
+                    });
+
+                    Promise.all(promises).then(() => {
+                        // Update table data
+                        selectedCells.forEach(key => {
+                            const [lineId, field] = key.split("|");
+                            table.getRows().forEach(row => {
+                                if (String(row.getData()["allocation_line_id"]) === lineId) {
+                                    row.getCell(field).setValue(formatted, true);
+                                }
+                            });
+                        });
+                        clearSelection();
+
+                        // Recompute violations
+                        const allData = table.getData();
+                        violations = computeViolations(allData, monthFields);
+                        table.getRows().forEach(row => {
+                            const emp = row.getData()["Employee"];
+                            monthFields.forEach(mf => {
+                                const c = row.getCell(mf);
+                                if (!c) return;
+                                c.getElement().style.backgroundColor =
+                                    violations.has(`${emp}|${mf}`) ? "#ffcccc" : "";
+                            });
+                        });
+                    });
+                });
+
+                document.getElementById("sel-clear").addEventListener("click", clearSelection);
+
+                // Add row
+                document.getElementById("add-row-btn").addEventListener("click", () => {
+                    const overlay = document.getElementById("add-row-overlay");
+                    overlay.classList.add("open");
+
+                    // Load employees
+                    fetch("/api/employees").then(r => r.json()).then(employees => {
+                        const sel = document.getElementById("ar-employee");
+                        sel.innerHTML = "";
+                        employees.forEach(e => {
+                            const opt = document.createElement("option");
+                            opt.value = e.name;
+                            opt.textContent = `${e.name} (${e.group})`;
+                            sel.appendChild(opt);
+                        });
+                    });
+
+                    // Load projects for autocomplete
+                    fetch("/api/projects").then(r => r.json()).then(projects => {
+                        const dl = document.getElementById("ar-project-list");
+                        dl.innerHTML = "";
+                        projects.forEach(p => {
+                            const opt = document.createElement("option");
+                            opt.value = p.project_code;
+                            opt.textContent = p.name ? `${p.project_code} - ${p.name}` : p.project_code;
+                            dl.appendChild(opt);
+                        });
+                    });
+                });
+
+                document.getElementById("ar-cancel").addEventListener("click", () => {
+                    document.getElementById("add-row-overlay").classList.remove("open");
+                });
+
+                document.getElementById("ar-submit").addEventListener("click", () => {
+                    const employee = document.getElementById("ar-employee").value;
+                    const code = document.getElementById("ar-project-code").value.trim();
+                    const name = document.getElementById("ar-project-name").value.trim();
+                    if (!employee || !code) {
+                        alert("Employee and project code are required.");
+                        return;
+                    }
+                    fetch("/api/allocation_line", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({
+                            employee_name: employee,
+                            project_code: code,
+                            project_name: name || null,
+                        }),
+                    })
+                    .then(r => r.json())
+                    .then(result => {
+                        document.getElementById("add-row-overlay").classList.remove("open");
+                        // Reload the page to refresh table data
+                        location.reload();
+                    });
                 });
 
                 btn.addEventListener("click", e => {
