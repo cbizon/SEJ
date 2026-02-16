@@ -26,7 +26,7 @@
         .col-dropdown label { display: block; cursor: pointer; padding: 3px 0; white-space: nowrap; }
         button { cursor: pointer; padding: 4px 10px; }
         .placeholder { color: #6c757d; font-style: italic; }
-        #people-section, #projects-section { display: none; }
+        #group-placeholder { color: #6c757d; font-style: italic; margin-top: 0.5rem; }
         .tabulator-calcs-bottom .tabulator-cell {
             font-weight: bold !important;
             background-color: #e9ecef !important;
@@ -46,6 +46,7 @@
     </div>
 
     <div id="error" style="display:none;color:#dc3545;font-weight:600"></div>
+    <p id="group-placeholder">Select a group above.</p>
 
     <div id="people-section">
         <h2>Non-Project % by Person</h2>
@@ -110,8 +111,7 @@
         }
 
         function initTables(months, people, projects) {
-            document.getElementById("people-section").style.display = "";
-            document.getElementById("projects-section").style.display = "";
+            document.getElementById("group-placeholder").style.display = "none";
 
             const totalRow = people.find(r => r.name === "Total");
             const peopleData = people.filter(r => r.name !== "Total");
