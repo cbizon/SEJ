@@ -417,7 +417,7 @@ def get_nonproject_by_group(db_path: str | Path) -> dict:
     create_schema(conn)
     months = _discover_months(conn)
 
-    rows = conn.execute("""
+    group_rows = conn.execute("""
         SELECT
             g.name AS group_name,
             e.year,
@@ -432,13 +432,26 @@ def get_nonproject_by_group(db_path: str | Path) -> dict:
         GROUP BY g.id, e.year, e.month
         ORDER BY g.name, e.year, e.month
     """).fetchall()
+
+    total_rows = conn.execute("""
+        SELECT
+            e.year,
+            e.month,
+            SUM(CASE WHEN p.project_code = 'Non-Project' THEN e.percentage ELSE 0 END) AS np_effort,
+            SUM(e.percentage) AS total_effort
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN projects p ON p.id = al.project_id
+        GROUP BY e.year, e.month
+        ORDER BY e.year, e.month
+    """).fetchall()
     conn.close()
 
     month_labels = [_month_label(y, m) for y, m in months]
 
     # Build a lookup: group_name -> month_label -> pct
     data: dict[str, dict[str, float]] = {}
-    for r in rows:
+    for r in group_rows:
         g = r["group_name"]
         label = _month_label(r["year"], r["month"])
         total = r["total_effort"]
@@ -451,6 +464,16 @@ def get_nonproject_by_group(db_path: str | Path) -> dict:
         for label in month_labels:
             row[label] = round(data[g].get(label, 0.0), 1)
         result_rows.append(row)
+
+    # Total row across all employees
+    total_row: dict = {"group": "Total"}
+    for r in total_rows:
+        label = _month_label(r["year"], r["month"])
+        t = r["total_effort"]
+        total_row[label] = round((r["np_effort"] / t * 100.0) if t else 0.0, 1)
+    for label in month_labels:
+        total_row.setdefault(label, 0.0)
+    result_rows.append(total_row)
 
     return {"months": month_labels, "rows": result_rows}
 

@@ -874,3 +874,18 @@ def test_api_nonproject_by_group_engineering_partial(main_client):
     eng_row = next(r for r in data["rows"] if r["group"] == "Engineering")
     for month in data["months"]:
         assert eng_row[month] == 0.0, f"Engineering {month}: expected 0%, got {eng_row[month]}"
+
+
+def test_api_nonproject_by_group_has_total_row(main_client):
+    data = main_client.get("/api/nonproject-by-group").json
+    assert data["rows"][-1]["group"] == "Total"
+
+
+def test_api_nonproject_by_group_total_correct(main_client):
+    # Jones,Bob: 100% NP; Smith,Jane: 0% NP; combined = 50% NP
+    data = main_client.get("/api/nonproject-by-group").json
+    total_row = data["rows"][-1]
+    for month in data["months"]:
+        assert abs(total_row[month] - 50.0) < 0.1, (
+            f"Total {month}: expected 50%, got {total_row[month]}"
+        )

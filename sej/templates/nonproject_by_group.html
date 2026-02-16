@@ -38,6 +38,12 @@
         td:first-child { text-align: left; font-weight: 600; }
         tr:last-child td { border-bottom: none; }
         tr:hover td { background: #f1f3f5; }
+        tr.total-row td {
+            border-top: 2px solid #495057;
+            background: #e9ecef;
+            font-weight: 600;
+        }
+        tr.total-row:hover td { background: #dee2e6; }
         .loading { color: #6c757d; font-style: italic; }
     </style>
 </head>
@@ -72,10 +78,12 @@
                     .join("");
 
                 const bodyRows = rows.map(row => {
+                    const isTotal = row.group === "Total";
+                    const cls = isTotal ? ' class="total-row"' : '';
                     const cells = [`<td>${row.group}</td>`]
                         .concat(months.map(m => `<td>${fmt(row[m])}</td>`))
                         .join("");
-                    return `<tr>${cells}</tr>`;
+                    return `<tr${cls}>${cells}</tr>`;
                 }).join("");
 
                 content.innerHTML = `
