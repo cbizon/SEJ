@@ -54,8 +54,28 @@ When viewing a **branch** database, the app enters edit mode:
 - Month cells become editable (click to type a new percentage)
 - **Selection mode** lets you select multiple cells and apply a single value to all of them
 - **Add allocation line** lets you create a new row for an employee/project combination
+- Branch controls (create, merge, discard) are available directly in the UI
 
 Edits on main are rejected — you must be on a branch to make changes.
+
+## Reports
+
+The web app includes several built-in reports, accessible from the **Reports** page (`/reports`):
+
+| Report | Description |
+|--------|-------------|
+| Non-Project by Group | Average non-project effort percentage per group, by month, with a breakdown table below |
+| Non-Project by Person | Per-person non-project effort percentages, by month |
+| Group Details | For a selected group, shows each employee's effort across all projects by month |
+| Project Details | For a selected project, shows each employee's effort by month, plus average % allocation across the team |
+
+## History
+
+The **History** page (`/history`) shows an audit log of all merges, including when they happened and what changed. Each merge entry links to a downloadable TSV of the specific changes applied.
+
+## Future Ideas
+
+See [docs/todo.md](docs/todo.md) for planned enhancements and longer-term ideas.
 
 ## Branching
 
