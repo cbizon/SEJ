@@ -110,6 +110,9 @@
         }
 
         function initTables(months, people, projects) {
+            document.getElementById("people-section").style.display = "";
+            document.getElementById("projects-section").style.display = "";
+
             const totalRow = people.find(r => r.name === "Total");
             const peopleData = people.filter(r => r.name !== "Total");
             currentTotals = totalRow || {};
@@ -145,9 +148,6 @@
 
             peopleTable.on("tableBuilt", () => setupColPicker("people-col-btn", "people-col-dropdown", peopleTable));
             projectsTable.on("tableBuilt", () => setupColPicker("projects-col-btn", "projects-col-dropdown", projectsTable));
-
-            document.getElementById("people-section").style.display = "";
-            document.getElementById("projects-section").style.display = "";
         }
 
         function showError(msg) {
