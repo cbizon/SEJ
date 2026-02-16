@@ -1,5 +1,6 @@
 """Queries that reshape the normalized database back into spreadsheet-style rows."""
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -403,3 +404,26 @@ def add_allocation_line(db_path: str | Path, employee_name: str,
     line_id = cur.lastrowid
     conn.close()
     return line_id
+
+
+def get_audit_log(db_path: str | Path) -> list[dict]:
+    """Return audit log entries, most recent first.
+
+    Each entry has: id, timestamp, action, details (parsed dict).
+    """
+    conn = get_connection(db_path)
+    create_schema(conn)
+    rows = conn.execute(
+        "SELECT id, timestamp, action, details FROM audit_log ORDER BY id DESC"
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        details = json.loads(r["details"]) if r["details"] else {}
+        result.append({
+            "id": r["id"],
+            "timestamp": r["timestamp"],
+            "action": r["action"],
+            "details": details,
+        })
+    return result

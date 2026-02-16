@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file, abort
 
 from sej.branch import create_branch, merge_branch, delete_branch, list_branches
 from sej.queries import (
@@ -15,6 +15,7 @@ from sej.queries import (
     update_effort,
     add_allocation_line,
     fix_totals,
+    get_audit_log,
 )
 
 
@@ -168,6 +169,29 @@ def create_app(db_path=None):
         branch_name = branches[0]["name"]
         delete_branch(main, branch_name)
         return jsonify({"discarded": branch_name})
+
+    @app.route("/history")
+    def history():
+        return render_template("history.html")
+
+    @app.route("/api/history")
+    def api_history():
+        main = app.config["MAIN_DB_PATH"]
+        entries = get_audit_log(main)
+        return jsonify(entries)
+
+    @app.route("/merges/<path:filename>")
+    def serve_merge_tsv(filename):
+        main = Path(app.config["MAIN_DB_PATH"])
+        merges_dir = main.parent / "merges"
+        tsv_path = (merges_dir / filename).resolve()
+        # Ensure the resolved path is inside merges_dir (no path traversal)
+        if merges_dir.resolve() not in tsv_path.parents:
+            abort(404)
+        if not tsv_path.exists():
+            abort(404)
+        return send_file(tsv_path, mimetype="text/tab-separated-values",
+                         as_attachment=True, download_name=tsv_path.name)
 
     return app
 

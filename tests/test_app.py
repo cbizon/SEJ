@@ -764,3 +764,68 @@ def test_edit_data_button_hidden_on_branch(main_client, loaded_db):
     main_client.post("/api/branch/create")
     resp = main_client.get("/api/data")
     assert resp.json["editable"] is True
+
+
+# --- History report tests ---
+
+def test_history_page_returns_200(main_client):
+    resp = main_client.get("/history")
+    assert resp.status_code == 200
+
+
+def test_api_history_returns_list(main_client):
+    resp = main_client.get("/api/history")
+    assert resp.status_code == 200
+    assert isinstance(resp.json, list)
+
+
+def test_api_history_contains_load_entry(main_client):
+    entries = main_client.get("/api/history").json
+    actions = [e["action"] for e in entries]
+    assert "load" in actions
+
+
+def test_api_history_merge_entry_has_tsv_path(main_client, loaded_db):
+    # Create a branch, make a change, merge it
+    main_client.post("/api/branch/create")
+    payload = main_client.get("/api/data").json
+    line_id = payload["data"][0]["allocation_line_id"]
+    main_client.put("/api/effort", json={
+        "allocation_line_id": line_id, "year": 2025, "month": 7, "percentage": 42.0,
+    })
+    main_client.post("/api/branch/merge")
+
+    entries = main_client.get("/api/history").json
+    merge_entries = [e for e in entries if e["action"] == "merge"]
+    assert merge_entries, "Expected at least one merge entry"
+    assert merge_entries[0]["details"]["tsv_path"] is not None
+
+
+def test_serve_merge_tsv(main_client, loaded_db):
+    # Create branch, change something, merge to produce a TSV
+    main_client.post("/api/branch/create")
+    payload = main_client.get("/api/data").json
+    line_id = payload["data"][0]["allocation_line_id"]
+    main_client.put("/api/effort", json={
+        "allocation_line_id": line_id, "year": 2025, "month": 7, "percentage": 42.0,
+    })
+    main_client.post("/api/branch/merge")
+
+    entries = main_client.get("/api/history").json
+    merge_entry = next(e for e in entries if e["action"] == "merge")
+    tsv_path = merge_entry["details"]["tsv_path"]
+    filename = tsv_path.replace("\\", "/").split("/")[-1]
+
+    resp = main_client.get(f"/merges/{filename}")
+    assert resp.status_code == 200
+    assert b"type\t" in resp.data
+
+
+def test_serve_merge_tsv_not_found(main_client):
+    resp = main_client.get("/merges/nonexistent_file.tsv")
+    assert resp.status_code == 404
+
+
+def test_serve_merge_tsv_path_traversal(main_client):
+    resp = main_client.get("/merges/../sej.db")
+    assert resp.status_code == 404
