@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>SEJ - Group Details</title>
+    <style>
+        body {
+            font-family: "Segoe UI", Arial, sans-serif;
+            margin: 1rem;
+            background: #f8f9fa;
+        }
+        h1 { margin-bottom: 0.25rem; }
+        nav { margin-bottom: 1rem; }
+        nav a { margin-right: 1rem; text-decoration: none; color: #0d6efd; }
+        nav a:hover { text-decoration: underline; }
+        .controls { margin-bottom: 1.5rem; }
+        .controls label { font-weight: 600; margin-right: 0.5rem; }
+        .controls select { padding: 4px 8px; font-size: 1em; }
+        h2 { margin: 1.5rem 0 0.5rem; font-size: 1.1em; color: #343a40; }
+        table {
+            border-collapse: collapse;
+            background: #fff;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+        th {
+            background: #343a40;
+            color: #fff;
+            padding: 8px 14px;
+            text-align: right;
+            white-space: nowrap;
+            font-size: 0.88em;
+        }
+        th:first-child, th.name-col { text-align: left; }
+        td {
+            padding: 7px 14px;
+            border-bottom: 1px solid #dee2e6;
+            text-align: right;
+            white-space: nowrap;
+            font-size: 0.9em;
+        }
+        td:first-child { text-align: left; }
+        tr:last-child td { border-bottom: none; }
+        tr:hover td { background: #f1f3f5; }
+        tr.total-row td {
+            border-top: 2px solid #495057;
+            background: #e9ecef;
+            font-weight: 600;
+        }
+        tr.total-row:hover td { background: #dee2e6; }
+        .placeholder { color: #6c757d; font-style: italic; }
+    </style>
+</head>
+<body>
+    <h1>Group Details</h1>
+    <nav>
+        <a href="/reports">&larr; Reports</a>
+    </nav>
+
+    <div class="controls">
+        <label for="group-select">Group:</label>
+        <select id="group-select">
+            <option value="">Loading&hellip;</option>
+        </select>
+    </div>
+
+    <div id="content"><p class="placeholder">Select a group above.</p></div>
+
+    <script>
+        function fmt(v) {
+            return v == null ? "" : v.toFixed(1) + "%";
+        }
+
+        function buildTable(headers, rows, totalRowKey) {
+            const ths = headers.map((h, i) =>
+                `<th${i === 0 ? ' class="name-col"' : ''}>${h}</th>`
+            ).join("");
+
+            const trs = rows.map(row => {
+                const isTotal = totalRowKey && row[totalRowKey] === "Total";
+                const cls = isTotal ? ' class="total-row"' : '';
+                const tds = headers.map((h, i) => {
+                    const v = row[h];
+                    const formatted = i === 0 ? (v ?? "") : fmt(v);
+                    return `<td>${formatted}</td>`;
+                }).join("");
+                return `<tr${cls}>${tds}</tr>`;
+            }).join("");
+
+            return `<table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
+        }
+
+        function render(data) {
+            const { months, people, projects } = data;
+
+            // People table: name + months
+            const peopleHeaders = ["Name"].concat(months);
+            const peopleRows = people.map(r => {
+                const out = { "Name": r.name };
+                months.forEach(m => { out[m] = r[m]; });
+                return out;
+            });
+
+            // Project table: project code, name, months
+            const projHeaders = ["Project", "Name"].concat(months);
+            const projRows = projects.map(r => {
+                const out = { "Project": r.project_code, "Name": r.project_name };
+                months.forEach(m => { out[m] = r[m]; });
+                return out;
+            });
+
+            let html = "";
+            html += "<h2>Non-Project % by Person</h2>";
+            html += buildTable(peopleHeaders, peopleRows, "Name");
+            html += "<h2>Total Effort by Project</h2>";
+            if (projRows.length) {
+                html += buildTable(projHeaders, projRows, null);
+            } else {
+                html += '<p class="placeholder">No project effort data for this group.</p>';
+            }
+
+            document.getElementById("content").innerHTML = html;
+        }
+
+        // Load groups into dropdown
+        fetch("/api/groups")
+            .then(r => r.json())
+            .then(groups => {
+                const sel = document.getElementById("group-select");
+                sel.innerHTML = '<option value="">-- select a group --</option>';
+                groups.forEach(g => {
+                    const opt = document.createElement("option");
+                    opt.value = g;
+                    opt.textContent = g;
+                    sel.appendChild(opt);
+                });
+
+                // If only one group, select it automatically
+                if (groups.length === 1) {
+                    sel.value = groups[0];
+                    loadGroup(groups[0]);
+                }
+            });
+
+        function loadGroup(group) {
+            if (!group) {
+                document.getElementById("content").innerHTML =
+                    '<p class="placeholder">Select a group above.</p>';
+                return;
+            }
+            document.getElementById("content").innerHTML =
+                '<p class="placeholder">Loading&hellip;</p>';
+            fetch(`/api/group-details?group=${encodeURIComponent(group)}`)
+                .then(r => r.json())
+                .then(render);
+        }
+
+        document.getElementById("group-select").addEventListener("change", e => {
+            loadGroup(e.target.value);
+        });
+    </script>
+</body>
+</html>

@@ -189,6 +189,126 @@ def get_spreadsheet_rows_with_ids(db_path: str | Path) -> tuple[list[str], list[
     return headers, result
 
 
+def get_groups(db_path: str | Path) -> list[str]:
+    """Return sorted list of group names."""
+    conn = get_connection(db_path)
+    rows = conn.execute("SELECT name FROM groups ORDER BY name").fetchall()
+    conn.close()
+    return [r["name"] for r in rows]
+
+
+def get_group_details(db_path: str | Path, group_name: str) -> dict:
+    """Return per-person Non-Project percentages and per-project effort totals for a group.
+
+    Returns a dict with:
+        months:   list of month label strings in chronological order
+        people:   list of {name, <month>: np_pct, ...} dicts, sorted by name, with a
+                  trailing Total row showing the group-level Non-Project percentage
+        projects: list of {project_code, project_name, <month>: total_effort, ...} dicts,
+                  sorted by project_code
+    """
+    conn = get_connection(db_path)
+    create_schema(conn)
+    months = _discover_months(conn)
+
+    person_rows = conn.execute("""
+        SELECT
+            emp.name AS employee_name,
+            e.year,
+            e.month,
+            SUM(CASE WHEN p.project_code = 'Non-Project' THEN e.percentage ELSE 0 END) AS np_effort,
+            SUM(e.percentage) AS total_effort
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN employees emp ON emp.id = al.employee_id
+        JOIN groups g ON g.id = emp.group_id
+        JOIN projects p ON p.id = al.project_id
+        WHERE g.name = ?
+        GROUP BY emp.id, e.year, e.month
+        ORDER BY emp.name, e.year, e.month
+    """, (group_name,)).fetchall()
+
+    project_rows = conn.execute("""
+        SELECT
+            p.project_code,
+            p.name AS project_name,
+            e.year,
+            e.month,
+            SUM(e.percentage) AS total_effort
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN employees emp ON emp.id = al.employee_id
+        JOIN groups g ON g.id = emp.group_id
+        JOIN projects p ON p.id = al.project_id
+        WHERE g.name = ?
+        GROUP BY p.id, e.year, e.month
+        ORDER BY p.project_code, e.year, e.month
+    """, (group_name,)).fetchall()
+
+    group_total_rows = conn.execute("""
+        SELECT
+            e.year,
+            e.month,
+            SUM(CASE WHEN p.project_code = 'Non-Project' THEN e.percentage ELSE 0 END) AS np_effort,
+            SUM(e.percentage) AS total_effort
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN employees emp ON emp.id = al.employee_id
+        JOIN groups g ON g.id = emp.group_id
+        JOIN projects p ON p.id = al.project_id
+        WHERE g.name = ?
+        GROUP BY e.year, e.month
+        ORDER BY e.year, e.month
+    """, (group_name,)).fetchall()
+    conn.close()
+
+    month_labels = [_month_label(y, m) for y, m in months]
+
+    # Per-person Non-Project percentage table
+    person_data: dict[str, dict[str, float]] = {}
+    for r in person_rows:
+        name = r["employee_name"]
+        label = _month_label(r["year"], r["month"])
+        total = r["total_effort"]
+        pct = (r["np_effort"] / total * 100.0) if total else 0.0
+        person_data.setdefault(name, {})[label] = pct
+
+    people_result: list[dict] = []
+    for name in sorted(person_data.keys()):
+        row: dict = {"name": name}
+        for label in month_labels:
+            row[label] = round(person_data[name].get(label, 0.0), 1)
+        people_result.append(row)
+
+    # Total row: group-level Non-Project percentage
+    total_row: dict = {"name": "Total"}
+    for r in group_total_rows:
+        label = _month_label(r["year"], r["month"])
+        t = r["total_effort"]
+        total_row[label] = round((r["np_effort"] / t * 100.0) if t else 0.0, 1)
+    for label in month_labels:
+        total_row.setdefault(label, 0.0)
+    people_result.append(total_row)
+
+    # Per-project total effort table
+    project_data: dict[str, dict[str, float]] = {}
+    project_names: dict[str, str] = {}
+    for r in project_rows:
+        code = r["project_code"]
+        label = _month_label(r["year"], r["month"])
+        project_data.setdefault(code, {})[label] = r["total_effort"]
+        project_names[code] = r["project_name"] or ""
+
+    projects_result: list[dict] = []
+    for code in sorted(project_data.keys()):
+        row = {"project_code": code, "project_name": project_names[code]}
+        for label in month_labels:
+            row[label] = round(project_data[code].get(label, 0.0), 1)
+        projects_result.append(row)
+
+    return {"months": month_labels, "people": people_result, "projects": projects_result}
+
+
 def get_employees(db_path: str | Path) -> list[dict]:
     """Return list of employees with their id, name, and group."""
     conn = get_connection(db_path)

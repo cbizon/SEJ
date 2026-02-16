@@ -17,6 +17,8 @@ from sej.queries import (
     fix_totals,
     get_audit_log,
     get_nonproject_by_group,
+    get_groups,
+    get_group_details,
 )
 
 
@@ -183,6 +185,23 @@ def create_app(db_path=None):
     def api_nonproject_by_group():
         main = app.config["MAIN_DB_PATH"]
         return jsonify(get_nonproject_by_group(main))
+
+    @app.route("/reports/group-details")
+    def report_group_details():
+        return render_template("group_details.html")
+
+    @app.route("/api/groups")
+    def api_groups():
+        main = app.config["MAIN_DB_PATH"]
+        return jsonify(get_groups(main))
+
+    @app.route("/api/group-details")
+    def api_group_details():
+        main = app.config["MAIN_DB_PATH"]
+        group = request.args.get("group", "")
+        if not group:
+            return jsonify({"error": "Missing required parameter: group"}), 400
+        return jsonify(get_group_details(main, group))
 
     @app.route("/history")
     def history():

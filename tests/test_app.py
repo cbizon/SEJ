@@ -889,3 +889,78 @@ def test_api_nonproject_by_group_total_correct(main_client):
         assert abs(total_row[month] - 50.0) < 0.1, (
             f"Total {month}: expected 50%, got {total_row[month]}"
         )
+
+
+# --- Group Details report tests ---
+
+def test_report_group_details_page_returns_200(main_client):
+    resp = main_client.get("/reports/group-details")
+    assert resp.status_code == 200
+
+
+def test_api_groups_returns_list(main_client):
+    resp = main_client.get("/api/groups")
+    assert resp.status_code == 200
+    groups = resp.json
+    assert "Engineering" in groups
+    assert "Ops" in groups
+
+
+def test_api_group_details_missing_param(main_client):
+    resp = main_client.get("/api/group-details")
+    assert resp.status_code == 400
+
+
+def test_api_group_details_structure(main_client):
+    resp = main_client.get("/api/group-details?group=Engineering")
+    assert resp.status_code == 200
+    data = resp.json
+    assert "months" in data
+    assert "people" in data
+    assert "projects" in data
+
+
+def test_api_group_details_people_names(main_client):
+    data = main_client.get("/api/group-details?group=Engineering").json
+    names = [r["name"] for r in data["people"]]
+    assert "Smith,Jane" in names
+    assert "Total" in names
+    assert names[-1] == "Total"
+
+
+def test_api_group_details_people_np_percentage(main_client):
+    # Smith,Jane has no Non-Project effort, so all months should be 0%
+    data = main_client.get("/api/group-details?group=Engineering").json
+    jane = next(r for r in data["people"] if r["name"] == "Smith,Jane")
+    for month in data["months"]:
+        assert jane[month] == 0.0
+
+
+def test_api_group_details_ops_person_np(main_client):
+    # Jones,Bob is 100% Non-Project
+    data = main_client.get("/api/group-details?group=Ops").json
+    bob = next(r for r in data["people"] if r["name"] == "Jones,Bob")
+    for month in data["months"]:
+        assert abs(bob[month] - 100.0) < 0.1
+
+
+def test_api_group_details_projects(main_client):
+    data = main_client.get("/api/group-details?group=Engineering").json
+    codes = [r["project_code"] for r in data["projects"]]
+    assert "5120001" in codes
+    assert "5120002" in codes
+
+
+def test_api_group_details_project_effort(main_client):
+    # Smith,Jane: 50% on 5120001 in July — that's the only Engineering member, so total = 50%
+    data = main_client.get("/api/group-details?group=Engineering").json
+    proj = next(r for r in data["projects"] if r["project_code"] == "5120001")
+    assert abs(proj["July 2025"] - 50.0) < 0.1
+
+
+def test_api_group_details_total_row_matches_group_np(main_client):
+    # Engineering has 0% NP, so the Total row should also be 0%
+    data = main_client.get("/api/group-details?group=Engineering").json
+    total = next(r for r in data["people"] if r["name"] == "Total")
+    for month in data["months"]:
+        assert total[month] == 0.0
