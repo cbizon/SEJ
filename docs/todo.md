@@ -1,5 +1,9 @@
 # Ideas for expansion
 
+## Compare mode
+
+Suppose that you have your version running, and a new IET comes out - don't overwrite it, but do the comparisons and make a series of accept/deny click boxes?
+
 ## Add external people
 
 For generating better project budget summaries, you want to see people outside the organization that are funded on the project.
