@@ -18,7 +18,7 @@ Salaries would allow turning various percentages into dollars.  It would also im
 
 ## Better non-project handling
 
-There are different types of non-project rows.  I'm not sure what they are, so the weren't carefully considered
+There are different types of non-project rows.  I'm not sure what they are, so they weren't carefully considered
 
 ## Project aggregation
 
@@ -39,3 +39,7 @@ The tool is now just a local single user setup.  To make it more of a shared sys
 ## Security
 
 Moving to a multi-user setup would also require at least authentication, and probably a more thoughtful look at the security.
+
+## Scenario planning
+
+The branch system is the core, but how would you extend it to allow for looking at different scenarios?
