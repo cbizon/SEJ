@@ -14,8 +14,9 @@ def create_schema(conn: sqlite3.Connection) -> None:
     """Create all tables. Safe to call on an existing database (no-op if tables exist)."""
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS groups (
-            id   INTEGER PRIMARY KEY,
-            name TEXT    UNIQUE NOT NULL
+            id          INTEGER PRIMARY KEY,
+            name        TEXT    UNIQUE NOT NULL,
+            is_internal INTEGER NOT NULL DEFAULT 1
         );
 
         CREATE TABLE IF NOT EXISTS employees (
@@ -64,4 +65,10 @@ def create_schema(conn: sqlite3.Connection) -> None:
             details   TEXT
         );
     """)
+
+    # Migration: add is_internal to groups if it doesn't exist (for older DBs)
+    existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(groups)").fetchall()}
+    if "is_internal" not in existing_cols:
+        conn.execute("ALTER TABLE groups ADD COLUMN is_internal INTEGER NOT NULL DEFAULT 1")
+
     conn.commit()

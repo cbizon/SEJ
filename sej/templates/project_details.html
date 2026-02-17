@@ -119,7 +119,7 @@
             dropdown.addEventListener("click", e => e.stopPropagation());
         }
 
-        function initTables(months, fte, people) {
+        function initTables(months, fte_rows, people) {
             document.getElementById("project-placeholder").style.display = "none";
 
             const fteColDefs = [
@@ -133,7 +133,7 @@
             ];
 
             fteTable = new Tabulator("#fte-table", {
-                data: [fte],
+                data: fte_rows,
                 columns: fteColDefs,
                 layout: "fitDataFill",
             });
@@ -162,11 +162,11 @@
                     if (!r.ok) return r.text().then(t => { throw new Error(`Server error ${r.status}: ${t}`); });
                     return r.json();
                 })
-                .then(({ months, fte, people }) => {
+                .then(({ months, fte_rows, people }) => {
                     if (fteTable === null) {
-                        initTables(months, fte, people);
+                        initTables(months, fte_rows, people);
                     } else {
-                        fteTable.setData([fte]);
+                        fteTable.setData(fte_rows);
                         peopleTable.setData(people);
                     }
                 })

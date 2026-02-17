@@ -15,6 +15,7 @@ from sej.queries import (
     update_effort,
     add_allocation_line,
     add_employee,
+    add_group,
     add_project,
     fix_totals,
     get_audit_log,
@@ -160,6 +161,28 @@ def create_app(db_path=None):
             return jsonify({"error": str(e)}), 400
         return jsonify({"employee_id": emp_id})
 
+    @app.route("/api/group", methods=["POST"])
+    def api_add_group():
+        db = _resolve_db(app)
+        info = get_branch_info(db)
+        if info.get("db_role") != "branch":
+            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "Request body must be JSON"}), 400
+        if "name" not in body or not str(body["name"]).strip():
+            return jsonify({"error": "Missing required field: name"}), 400
+
+        name = body["name"].strip()
+        is_internal = bool(body.get("is_internal", True))
+
+        try:
+            group_id = add_group(db, name, is_internal)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"group_id": group_id})
+
     @app.route("/api/project", methods=["POST"])
     def api_add_project():
         db = _resolve_db(app)
@@ -248,8 +271,7 @@ def create_app(db_path=None):
 
     @app.route("/api/groups")
     def api_groups():
-        main = app.config["MAIN_DB_PATH"]
-        return jsonify(get_groups(main))
+        return jsonify(get_groups(_resolve_db(app)))
 
     @app.route("/api/group-details")
     def api_group_details():

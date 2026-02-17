@@ -103,6 +103,16 @@
             align-items: center;
         }
         #add-employee-overlay.open { display: flex; }
+        #add-group-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.4);
+            z-index: 300;
+            justify-content: center;
+            align-items: center;
+        }
+        #add-group-overlay.open { display: flex; }
         #add-row-form {
             background: #fff;
             padding: 20px;
@@ -134,6 +144,7 @@
         <button id="add-employee-btn" style="display:none">Add employee</button>
         <button id="add-row-btn" style="display:none">Add allocation line</button>
         <button id="add-project-btn" style="display:none">Add project</button>
+        <button id="add-group-btn" style="display:none">Add group</button>
         <button id="save-btn" style="display:none">Save changes</button>
         <button id="discard-btn" style="display:none">Discard changes</button>
     </div>
@@ -192,6 +203,27 @@
         </div>
     </div>
 
+    <div id="add-group-overlay">
+        <div id="add-row-form">
+            <h3 style="margin-top:0">Add Group</h3>
+            <label>Group Name</label>
+            <input id="ag-name" placeholder="Enter group name">
+            <label>Type</label>
+            <div style="margin-top:6px;display:flex;gap:16px;">
+                <label style="font-weight:normal;display:flex;align-items:center;gap:4px;">
+                    <input type="radio" name="ag-type" id="ag-internal" value="internal" checked> Internal
+                </label>
+                <label style="font-weight:normal;display:flex;align-items:center;gap:4px;">
+                    <input type="radio" name="ag-type" id="ag-external" value="external"> External
+                </label>
+            </div>
+            <div class="btn-row">
+                <button id="ag-cancel">Cancel</button>
+                <button id="ag-submit">Add</button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
     <script>
         const monthPattern = /January|February|March|April|May|June|July|August|September|October|November|December/;
@@ -239,10 +271,11 @@
             table.setFilter(row => visibleMonthFields.some(f => row[f] !== "" && row[f] != null));
         }
 
-        function computeViolations(data, monthFields) {
+        function computeViolations(data, monthFields, externalGroups) {
             const violations = new Set();
             const sums = {};
             data.forEach(row => {
+                if (externalGroups && externalGroups.has(row["Group"])) return;
                 const emp = row["Employee"];
                 if (!sums[emp]) sums[emp] = {};
                 monthFields.forEach(mf => {
@@ -274,9 +307,13 @@
             updateSelectionToolbar();
         }
 
-        fetch("/api/data")
-            .then(r => r.json())
-            .then(({columns, data, editable, branch_name}) => {
+        Promise.all([
+            fetch("/api/data").then(r => r.json()),
+            fetch("/api/groups").then(r => r.json()),
+        ]).then(([{columns, data, editable, branch_name}, groupsList]) => {
+                const externalGroups = new Set(
+                    groupsList.filter(g => !g.is_internal).map(g => g.name)
+                );
                 // Show branch banner and edit-mode buttons
                 if (editable && branch_name) {
                     const banner = document.getElementById("branch-banner");
@@ -287,6 +324,7 @@
                     document.getElementById("add-employee-btn").style.display = "";
                     document.getElementById("add-row-btn").style.display = "";
                     document.getElementById("add-project-btn").style.display = "";
+                    document.getElementById("add-group-btn").style.display = "";
                     document.getElementById("save-btn").style.display = "";
                     document.getElementById("discard-btn").style.display = "";
                 } else {
@@ -294,7 +332,7 @@
                 }
 
                 const monthFields = columns.filter(name => monthPattern.test(name));
-                let violations = computeViolations(data, monthFields);
+                let violations = computeViolations(data, monthFields, externalGroups);
 
                 const colDefs = columns.map(name => {
                     const isMonth = monthPattern.test(name);
@@ -471,7 +509,7 @@
 
                         // Recompute violations
                         const allData = table.getData();
-                        violations = computeViolations(allData, monthFields);
+                        violations = computeViolations(allData, monthFields, externalGroups);
                         table.getRows().forEach(row => {
                             monthFields.forEach(mf => {
                                 const c = row.getCell(mf);
@@ -531,8 +569,8 @@
                             return fetch("/api/data").then(r => r.json());
                         })
                         .then(({data}) => {
+                            violations = computeViolations(data, monthFields, externalGroups);
                             table.replaceData(data);
-                            violations = computeViolations(table.getData(), monthFields);
                         });
                 });
 
@@ -583,7 +621,7 @@
 
                         // Recompute violations
                         const allData = table.getData();
-                        violations = computeViolations(allData, monthFields);
+                        violations = computeViolations(allData, monthFields, externalGroups);
                         table.getRows().forEach(row => {
                             const emp = row.getData()["Employee"];
                             monthFields.forEach(mf => {
@@ -613,8 +651,8 @@
                         sel.innerHTML = "";
                         groups.forEach(g => {
                             const opt = document.createElement("option");
-                            opt.value = g;
-                            opt.textContent = g;
+                            opt.value = g.name;
+                            opt.textContent = g.name;
                             sel.appendChild(opt);
                         });
                     });
@@ -720,7 +758,7 @@
                         }
                         table.replaceData(data).then(() => {
                             applyRowFilter(table);
-                            violations = computeViolations(table.getData(), monthFields);
+                            violations = computeViolations(table.getData(), monthFields, externalGroups);
                             // Scroll to the new row
                             const rows = table.getRows();
                             for (const row of rows) {
@@ -761,6 +799,52 @@
                     .then(result => {
                         document.getElementById("add-project-overlay").classList.remove("open");
                         alert(`Project created with code: ${result.project_code}`);
+                    });
+                });
+
+                // Add group
+                document.getElementById("add-group-btn").addEventListener("click", () => {
+                    document.getElementById("ag-name").value = "";
+                    document.getElementById("ag-internal").checked = true;
+                    document.getElementById("add-group-overlay").classList.add("open");
+                });
+
+                document.getElementById("ag-cancel").addEventListener("click", () => {
+                    document.getElementById("add-group-overlay").classList.remove("open");
+                });
+
+                document.getElementById("ag-submit").addEventListener("click", () => {
+                    const name = document.getElementById("ag-name").value.trim();
+                    if (!name) {
+                        alert("Group name is required.");
+                        return;
+                    }
+                    const isInternal = document.getElementById("ag-internal").checked;
+                    fetch("/api/group", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({ name, is_internal: isInternal }),
+                    })
+                    .then(r => {
+                        if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
+                        return r.json();
+                    })
+                    .then(() => {
+                        document.getElementById("add-group-overlay").classList.remove("open");
+                        return fetch("/api/groups").then(r => r.json());
+                    })
+                    .then(groupsList => {
+                        externalGroups.clear();
+                        groupsList.filter(g => !g.is_internal).forEach(g => externalGroups.add(g.name));
+                        violations = computeViolations(table.getData(), monthFields, externalGroups);
+                        table.getRows().forEach(row => {
+                            const emp = row.getData()["Employee"];
+                            monthFields.forEach(mf => {
+                                const c = row.getCell(mf);
+                                if (c) c.getElement().style.backgroundColor =
+                                    violations.has(`${emp}|${mf}`) ? "#ffcccc" : "";
+                            });
+                        });
                     });
                 });
 

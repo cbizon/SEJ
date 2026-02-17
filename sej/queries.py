@@ -189,12 +189,13 @@ def get_spreadsheet_rows_with_ids(db_path: str | Path) -> tuple[list[str], list[
     return headers, result
 
 
-def get_groups(db_path: str | Path) -> list[str]:
-    """Return sorted list of group names."""
+def get_groups(db_path: str | Path) -> list[dict]:
+    """Return sorted list of groups with name and is_internal flag."""
     conn = get_connection(db_path)
-    rows = conn.execute("SELECT name FROM groups ORDER BY name").fetchall()
+    create_schema(conn)
+    rows = conn.execute("SELECT name, is_internal FROM groups ORDER BY name").fetchall()
     conn.close()
-    return [r["name"] for r in rows]
+    return [{"name": r["name"], "is_internal": bool(r["is_internal"])} for r in rows]
 
 
 def get_group_details(db_path: str | Path, group_name: str) -> dict:
@@ -380,12 +381,15 @@ def fix_totals(db_path: str | Path) -> list[dict]:
     conn = get_connection(db_path)
     months = _discover_months(conn)
 
-    # Collect ALL Non-Project lines per employee, preferred first.
+    # Collect ALL Non-Project lines per internal employee, preferred first.
     np_rows = conn.execute("""
         SELECT al.employee_id, al.id AS line_id
         FROM allocation_lines al
+        JOIN employees emp ON emp.id = al.employee_id
+        JOIN groups g ON g.id = emp.group_id
         JOIN projects p ON p.id = al.project_id
         WHERE p.project_code = 'Non-Project'
+        AND g.is_internal = 1
         ORDER BY al.employee_id,
                  CASE WHEN al.fund_code = '20152' THEN 0 ELSE 1 END,
                  al.id
@@ -402,7 +406,10 @@ def fix_totals(db_path: str | Path) -> list[dict]:
             SELECT al.employee_id, SUM(e.percentage) AS total
             FROM efforts e
             JOIN allocation_lines al ON al.id = e.allocation_line_id
+            JOIN employees emp ON emp.id = al.employee_id
+            JOIN groups g ON g.id = emp.group_id
             WHERE e.year = ? AND e.month = ?
+            AND g.is_internal = 1
             GROUP BY al.employee_id
         """, (year, month)).fetchall()
 
@@ -551,6 +558,23 @@ def add_employee(db_path: str | Path, last_name: str, first_name: str,
     return emp_id
 
 
+def add_group(db_path: str | Path, name: str, is_internal: bool) -> int:
+    """Add a new group. Returns the new group id. Raises ValueError if name already exists."""
+    conn = get_connection(db_path)
+    existing = conn.execute("SELECT id FROM groups WHERE name = ?", (name,)).fetchone()
+    if existing:
+        conn.close()
+        raise ValueError(f"Group already exists: {name}")
+    cur = conn.execute(
+        "INSERT INTO groups (name, is_internal) VALUES (?, ?)",
+        (name, 1 if is_internal else 0),
+    )
+    conn.commit()
+    group_id = cur.lastrowid
+    conn.close()
+    return group_id
+
+
 def add_project(db_path: str | Path, name: str) -> str:
     """Add a new project with an auto-generated project code.
 
@@ -599,6 +623,7 @@ def get_nonproject_by_group(db_path: str | Path) -> dict:
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
         JOIN projects p ON p.id = al.project_id
+        WHERE g.is_internal = 1
         GROUP BY g.id, e.year, e.month
         ORDER BY g.name, e.year, e.month
     """).fetchall()
@@ -613,7 +638,9 @@ def get_nonproject_by_group(db_path: str | Path) -> dict:
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
+        JOIN groups g ON g.id = emp.group_id
         JOIN projects p ON p.id = al.project_id
+        WHERE g.is_internal = 1
         GROUP BY e.year, e.month
         ORDER BY e.year, e.month
     """).fetchall()
@@ -690,6 +717,7 @@ def get_nonproject_by_person(db_path: str | Path) -> dict:
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
         JOIN projects p ON p.id = al.project_id
+        WHERE g.is_internal = 1
         GROUP BY emp.id, e.year, e.month
         ORDER BY emp.name, e.year, e.month
     """).fetchall()
@@ -703,7 +731,9 @@ def get_nonproject_by_person(db_path: str | Path) -> dict:
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
+        JOIN groups g ON g.id = emp.group_id
         JOIN projects p ON p.id = al.project_id
+        WHERE g.is_internal = 1
         GROUP BY e.year, e.month
         ORDER BY e.year, e.month
     """).fetchall()
@@ -752,12 +782,26 @@ def get_project_details(db_path: str | Path, project_code: str) -> dict:
     create_schema(conn)
     months = _discover_months(conn)
 
-    fte_rows = conn.execute("""
+    internal_fte_rows = conn.execute("""
         SELECT e.year, e.month, SUM(e.percentage) / 100.0 AS total_fte
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN employees emp ON emp.id = al.employee_id
+        JOIN groups g ON g.id = emp.group_id
         JOIN projects p ON p.id = al.project_id
-        WHERE p.project_code = ?
+        WHERE p.project_code = ? AND g.is_internal = 1
+        GROUP BY e.year, e.month
+        ORDER BY e.year, e.month
+    """, (project_code,)).fetchall()
+
+    external_fte_rows = conn.execute("""
+        SELECT e.year, e.month, SUM(e.percentage) / 100.0 AS total_fte
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN employees emp ON emp.id = al.employee_id
+        JOIN groups g ON g.id = emp.group_id
+        JOIN projects p ON p.id = al.project_id
+        WHERE p.project_code = ? AND g.is_internal = 0
         GROUP BY e.year, e.month
         ORDER BY e.year, e.month
     """, (project_code,)).fetchall()
@@ -782,14 +826,24 @@ def get_project_details(db_path: str | Path, project_code: str) -> dict:
 
     month_labels = [_month_label(y, m) for y, m in months]
 
-    fte_data: dict[str, float] = {}
-    for r in fte_rows:
-        label = _month_label(r["year"], r["month"])
-        fte_data[label] = round(r["total_fte"], 2)
+    internal_fte_data: dict[str, float] = {}
+    for r in internal_fte_rows:
+        internal_fte_data[_month_label(r["year"], r["month"])] = round(r["total_fte"], 2)
 
-    fte_row: dict = {"label": "Total FTE"}
+    external_fte_data: dict[str, float] = {}
+    for r in external_fte_rows:
+        external_fte_data[_month_label(r["year"], r["month"])] = round(r["total_fte"], 2)
+
+    internal_row: dict = {"label": "Internal FTE"}
     for label in month_labels:
-        fte_row[label] = fte_data.get(label, 0.0)
+        internal_row[label] = internal_fte_data.get(label, 0.0)
+
+    fte_result: list[dict] = [internal_row]
+    if external_fte_data:
+        external_row: dict = {"label": "External FTE"}
+        for label in month_labels:
+            external_row[label] = external_fte_data.get(label, 0.0)
+        fte_result.append(external_row)
 
     person_data: dict[str, dict[str, float]] = {}
     person_group: dict[str, str] = {}
@@ -806,7 +860,7 @@ def get_project_details(db_path: str | Path, project_code: str) -> dict:
             row[label] = round(person_data[name].get(label, 0.0), 1)
         people_result.append(row)
 
-    return {"months": month_labels, "fte": fte_row, "people": people_result}
+    return {"months": month_labels, "fte_rows": fte_result, "people": people_result}
 
 
 def get_audit_log(db_path: str | Path) -> list[dict]:
