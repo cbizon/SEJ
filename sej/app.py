@@ -14,6 +14,7 @@ from sej.queries import (
     get_branch_info,
     update_effort,
     add_allocation_line,
+    add_employee,
     add_project,
     fix_totals,
     get_audit_log,
@@ -133,6 +134,31 @@ def create_app(db_path=None):
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         return jsonify({"allocation_line_id": line_id})
+
+    @app.route("/api/employee", methods=["POST"])
+    def api_add_employee():
+        db = _resolve_db(app)
+        info = get_branch_info(db)
+        if info.get("db_role") != "branch":
+            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "Request body must be JSON"}), 400
+        for key in ("first_name", "last_name", "group_name"):
+            if key not in body or not str(body[key]).strip():
+                return jsonify({"error": f"Missing required field: {key}"}), 400
+
+        first_name = body["first_name"].strip()
+        last_name = body["last_name"].strip()
+        middle_name = body.get("middle_name", "").strip()
+        group_name = body["group_name"].strip()
+
+        try:
+            emp_id = add_employee(db, last_name, first_name, middle_name, group_name)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"employee_id": emp_id})
 
     @app.route("/api/project", methods=["POST"])
     def api_add_project():

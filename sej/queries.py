@@ -521,6 +521,36 @@ def add_allocation_line(db_path: str | Path, employee_name: str,
     return line_id
 
 
+def add_employee(db_path: str | Path, last_name: str, first_name: str,
+                 middle_name: str, group_name: str) -> int:
+    """Add a new employee to the given group.
+
+    Name is stored as 'LastName,FirstName' or 'LastName,FirstName Middle'
+    if a middle name is provided. Returns the new employee id.
+    Raises ValueError if the group is not found.
+    """
+    name = f"{last_name},{first_name}"
+    if middle_name:
+        name = f"{name} {middle_name}"
+
+    conn = get_connection(db_path)
+    group = conn.execute(
+        "SELECT id FROM groups WHERE name = ?", (group_name,)
+    ).fetchone()
+    if group is None:
+        conn.close()
+        raise ValueError(f"Group not found: {group_name}")
+
+    cur = conn.execute(
+        "INSERT INTO employees (name, group_id) VALUES (?, ?)",
+        (name, group["id"]),
+    )
+    conn.commit()
+    emp_id = cur.lastrowid
+    conn.close()
+    return emp_id
+
+
 def add_project(db_path: str | Path, name: str) -> str:
     """Add a new project with an auto-generated project code.
 
