@@ -93,6 +93,16 @@
             align-items: center;
         }
         #add-row-overlay.open { display: flex; }
+        #add-employee-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.4);
+            z-index: 300;
+            justify-content: center;
+            align-items: center;
+        }
+        #add-employee-overlay.open { display: flex; }
         #add-row-form {
             background: #fff;
             padding: 20px;
@@ -120,6 +130,7 @@
         <button id="edit-data-btn" style="display:none">Edit data</button>
         <button id="select-mode-btn" style="display:none">Selection mode</button>
         <button id="fix-totals-btn" style="display:none">Fix totals</button>
+        <button id="add-employee-btn" style="display:none">Add employee</button>
         <button id="add-row-btn" style="display:none">Add allocation line</button>
         <button id="add-project-btn" style="display:none">Add project</button>
         <button id="save-btn" style="display:none">Save changes</button>
@@ -146,6 +157,24 @@
             <div class="btn-row">
                 <button id="ar-cancel">Cancel</button>
                 <button id="ar-submit">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="add-employee-overlay">
+        <div id="add-row-form">
+            <h3 style="margin-top:0">Add Employee</h3>
+            <label>First Name</label>
+            <input id="ae-first-name" placeholder="First name">
+            <label>Last Name</label>
+            <input id="ae-last-name" placeholder="Last name">
+            <label>Middle Name <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
+            <input id="ae-middle-name" placeholder="Middle name">
+            <label>Group</label>
+            <select id="ae-group"></select>
+            <div class="btn-row">
+                <button id="ae-cancel">Cancel</button>
+                <button id="ae-submit">Add</button>
             </div>
         </div>
     </div>
@@ -254,6 +283,7 @@
                     banner.style.display = "block";
                     document.getElementById("select-mode-btn").style.display = "";
                     document.getElementById("fix-totals-btn").style.display = "";
+                    document.getElementById("add-employee-btn").style.display = "";
                     document.getElementById("add-row-btn").style.display = "";
                     document.getElementById("add-project-btn").style.display = "";
                     document.getElementById("save-btn").style.display = "";
@@ -545,6 +575,58 @@
                 });
 
                 document.getElementById("sel-clear").addEventListener("click", clearSelection);
+
+                // Add employee
+                document.getElementById("add-employee-btn").addEventListener("click", () => {
+                    document.getElementById("ae-first-name").value = "";
+                    document.getElementById("ae-last-name").value = "";
+                    document.getElementById("ae-middle-name").value = "";
+
+                    fetch("/api/groups").then(r => r.json()).then(groups => {
+                        const sel = document.getElementById("ae-group");
+                        sel.innerHTML = "";
+                        groups.forEach(g => {
+                            const opt = document.createElement("option");
+                            opt.value = g;
+                            opt.textContent = g;
+                            sel.appendChild(opt);
+                        });
+                    });
+
+                    document.getElementById("add-employee-overlay").classList.add("open");
+                });
+
+                document.getElementById("ae-cancel").addEventListener("click", () => {
+                    document.getElementById("add-employee-overlay").classList.remove("open");
+                });
+
+                document.getElementById("ae-submit").addEventListener("click", () => {
+                    const firstName = document.getElementById("ae-first-name").value.trim();
+                    const lastName = document.getElementById("ae-last-name").value.trim();
+                    const middleName = document.getElementById("ae-middle-name").value.trim();
+                    const groupName = document.getElementById("ae-group").value;
+                    if (!firstName || !lastName) {
+                        alert("First name and last name are required.");
+                        return;
+                    }
+                    fetch("/api/employee", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({
+                            first_name: firstName,
+                            last_name: lastName,
+                            middle_name: middleName,
+                            group_name: groupName,
+                        }),
+                    })
+                    .then(r => {
+                        if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
+                        return r.json();
+                    })
+                    .then(() => {
+                        document.getElementById("add-employee-overlay").classList.remove("open");
+                    });
+                });
 
                 // Add row
                 document.getElementById("add-row-btn").addEventListener("click", () => {

@@ -1137,6 +1137,81 @@ def test_api_project_details_person_group(main_client):
     assert jane["group"] == "Engineering"
 
 
+def test_api_add_employee_forbidden_on_main(client):
+    resp = client.post("/api/employee", json={
+        "first_name": "Jane", "last_name": "Smith", "group_name": "Engineering",
+    })
+    assert resp.status_code == 403
+
+
+def test_api_add_employee_missing_field(branch_client):
+    resp = branch_client.post("/api/employee", json={
+        "first_name": "Jane", "last_name": "Smith",
+    })
+    assert resp.status_code == 400
+
+
+def test_api_add_employee_unknown_group(branch_client):
+    resp = branch_client.post("/api/employee", json={
+        "first_name": "Jane", "last_name": "Doe", "group_name": "NoSuchGroup",
+    })
+    assert resp.status_code == 400
+
+
+def test_api_add_employee_success(branch_client, branch_db):
+    resp = branch_client.post("/api/employee", json={
+        "first_name": "Jane", "last_name": "Doe", "group_name": "Engineering",
+    })
+    assert resp.status_code == 200
+    assert "employee_id" in resp.json
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    emp = conn.execute(
+        "SELECT name FROM employees WHERE id = ?", (resp.json["employee_id"],)
+    ).fetchone()
+    conn.close()
+    assert emp["name"] == "Doe,Jane"
+
+
+def test_api_add_employee_with_middle_name(branch_client, branch_db):
+    resp = branch_client.post("/api/employee", json={
+        "first_name": "Jane", "last_name": "Doe",
+        "middle_name": "Marie", "group_name": "Engineering",
+    })
+    assert resp.status_code == 200
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    emp = conn.execute(
+        "SELECT name FROM employees WHERE id = ?", (resp.json["employee_id"],)
+    ).fetchone()
+    conn.close()
+    assert emp["name"] == "Doe,Jane Marie"
+
+
+def test_api_add_employee_without_middle_name(branch_client, branch_db):
+    resp = branch_client.post("/api/employee", json={
+        "first_name": "Bob", "last_name": "Doe",
+        "middle_name": "", "group_name": "Ops",
+    })
+    assert resp.status_code == 200
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    emp = conn.execute(
+        "SELECT name FROM employees WHERE id = ?", (resp.json["employee_id"],)
+    ).fetchone()
+    conn.close()
+    assert emp["name"] == "Doe,Bob"
+
+
+def test_api_add_employee_missing_json(branch_client):
+    resp = branch_client.post("/api/employee", data="not json",
+                              content_type="text/plain")
+    assert resp.status_code == 400
+
+
 def test_api_project_details_nonproject(main_client):
     # Jones,Bob is 100% Non-Project → FTE = 1.0 per month
     data = main_client.get("/api/project-details?project=Non-Project").json
