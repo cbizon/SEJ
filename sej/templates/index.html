@@ -127,6 +127,7 @@
             <div id="col-dropdown"></div>
         </div>
         <button id="show-all-btn">Show all rows</button>
+        <button id="export-btn">Export TSV</button>
         <button id="edit-data-btn" style="display:none">Edit data</button>
         <button id="select-mode-btn" style="display:none">Selection mode</button>
         <button id="fix-totals-btn" style="display:none">Fix totals</button>
@@ -493,6 +494,31 @@
                     showAllRows = !showAllRows;
                     showAllBtn.classList.toggle("active", showAllRows);
                     applyRowFilter(table);
+                });
+
+                document.getElementById("export-btn").addEventListener("click", () => {
+                    const cols = table.getColumns().filter(c =>
+                        c.isVisible() && c.getField() !== "allocation_line_id"
+                    );
+                    const headers = cols.map(c => c.getDefinition().title);
+                    const rows = table.getRows("active");
+                    const lines = [headers.join("\t")];
+                    rows.forEach(row => {
+                        const d = row.getData();
+                        lines.push(cols.map(c => {
+                            const v = d[c.getField()];
+                            if (v == null) return "";
+                            const s = String(v);
+                            return monthPattern.test(c.getField()) ? s.replace("%", "") : s;
+                        }).join("\t"));
+                    });
+                    const blob = new Blob([lines.join("\n")], {type: "text/tab-separated-values"});
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = "effort_export.tsv";
+                    a.click();
+                    URL.revokeObjectURL(url);
                 });
 
                 // Fix totals
