@@ -13,12 +13,15 @@ are stored against those lines.
 
 ### `groups`
 
-Organizational teams or units.
+Organizational teams or units. Groups loaded from the TSV are always internal.
+Externally-created groups (people from partner organizations) are marked as
+external so their effort is not expected to sum to 100%.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
 | `id` | integer | PK |
 | `name` | text | UNIQUE NOT NULL |
+| `is_internal` | integer | NOT NULL DEFAULT 1 — 1 = internal, 0 = external |
 
 ---
 

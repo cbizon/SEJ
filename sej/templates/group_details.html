@@ -178,21 +178,22 @@
                 .catch(err => showError(err.message));
         }
 
-        // Load groups into dropdown
+        // Load groups into dropdown (internal only)
         fetch("/api/groups")
             .then(r => r.json())
             .then(groups => {
+                const internal = groups.filter(g => g.is_internal);
                 const sel = document.getElementById("group-select");
                 sel.innerHTML = '<option value="">-- select a group --</option>';
-                groups.forEach(g => {
+                internal.forEach(g => {
                     const opt = document.createElement("option");
-                    opt.value = g;
-                    opt.textContent = g;
+                    opt.value = g.name;
+                    opt.textContent = g.name;
                     sel.appendChild(opt);
                 });
-                if (groups.length === 1) {
-                    sel.value = groups[0];
-                    loadGroup(groups[0]);
+                if (internal.length === 1) {
+                    sel.value = internal[0].name;
+                    loadGroup(internal[0].name);
                 }
             });
 

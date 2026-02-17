@@ -706,6 +706,34 @@ def test_fix_totals_over_100_no_np_line_not_created(over_100_no_np_db):
     assert np_line is None, "No Non-Project line should be created when total > 100"
 
 
+def test_fix_totals_skips_external_group_employees(tmp_path):
+    """fix_totals must not adjust effort for employees in external groups."""
+    tsv = tmp_path / "data_anon.tsv"
+    db = tmp_path / "test_anon.db"
+    _write_tsv(tsv, [
+        # External,Person: 50% on a project — would be a violation if internal
+        ["External,Person", "PartnerOrg", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "50.00%", ""],
+    ])
+    load_tsv(tsv, db)
+
+    # Mark PartnerOrg as external
+    from sej.db import get_connection
+    conn = get_connection(db)
+    conn.execute("UPDATE groups SET is_internal = 0 WHERE name = 'PartnerOrg'")
+    conn.commit()
+    conn.close()
+
+    branch_db = create_branch(db, "test_ext")
+    app = create_app(db_path=branch_db)
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        resp = c.post("/api/fix-totals")
+    assert resp.status_code == 200
+    assert resp.json["changes"] == [], "External group employees must not be adjusted"
+
+
 # --- Branch workflow API tests ---
 
 @pytest.fixture
@@ -949,8 +977,18 @@ def test_api_groups_returns_list(main_client):
     resp = main_client.get("/api/groups")
     assert resp.status_code == 200
     groups = resp.json
-    assert "Engineering" in groups
-    assert "Ops" in groups
+    names = [g["name"] for g in groups]
+    assert "Engineering" in names
+    assert "Ops" in names
+    assert all(g["is_internal"] is True for g in groups)
+
+
+def test_api_groups_includes_branch_groups(branch_client):
+    """Groups added in the branch session should appear in the groups list."""
+    branch_client.post("/api/group", json={"name": "Partner Org", "is_internal": False})
+    resp = branch_client.get("/api/groups")
+    names = [g["name"] for g in resp.json]
+    assert "Partner Org" in names
 
 
 def test_api_group_details_missing_param(main_client):
@@ -1093,7 +1131,7 @@ def test_api_project_details_structure(main_client):
     assert resp.status_code == 200
     data = resp.json
     assert "months" in data
-    assert "fte" in data
+    assert "fte_rows" in data
     assert "people" in data
 
 
@@ -1105,14 +1143,21 @@ def test_api_project_details_months(main_client):
 
 def test_api_project_details_fte_label(main_client):
     data = main_client.get("/api/project-details?project=5120001").json
-    assert data["fte"]["label"] == "Total FTE"
+    assert data["fte_rows"][0]["label"] == "Internal FTE"
 
 
 def test_api_project_details_fte_values(main_client):
     # Smith,Jane: 50% on 5120001 in July → FTE = 0.50; 60% in August → FTE = 0.60
     data = main_client.get("/api/project-details?project=5120001").json
-    assert abs(data["fte"]["July 2025"] - 0.50) < 0.01
-    assert abs(data["fte"]["August 2025"] - 0.60) < 0.01
+    internal = data["fte_rows"][0]
+    assert abs(internal["July 2025"] - 0.50) < 0.01
+    assert abs(internal["August 2025"] - 0.60) < 0.01
+
+
+def test_api_project_details_no_external_row_when_none(main_client):
+    # No external employees in the base fixture → only one FTE row
+    data = main_client.get("/api/project-details?project=5120001").json
+    assert len(data["fte_rows"]) == 1
 
 
 def test_api_project_details_people(main_client):
@@ -1215,6 +1260,154 @@ def test_api_add_employee_missing_json(branch_client):
 def test_api_project_details_nonproject(main_client):
     # Jones,Bob is 100% Non-Project → FTE = 1.0 per month
     data = main_client.get("/api/project-details?project=Non-Project").json
-    assert abs(data["fte"]["July 2025"] - 1.0) < 0.01
+    internal = data["fte_rows"][0]
+    assert abs(internal["July 2025"] - 1.0) < 0.01
     bob = next(r for r in data["people"] if r["name"] == "Jones,Bob")
     assert abs(bob["July 2025"] - 100.0) < 0.1
+
+
+# --- Add group tests ---
+
+def test_api_add_group_forbidden_on_main(client):
+    resp = client.post("/api/group", json={"name": "New Group"})
+    assert resp.status_code == 403
+
+
+def test_api_add_group_missing_name(branch_client):
+    resp = branch_client.post("/api/group", json={"is_internal": True})
+    assert resp.status_code == 400
+
+
+def test_api_add_group_missing_json(branch_client):
+    resp = branch_client.post("/api/group", data="not json", content_type="text/plain")
+    assert resp.status_code == 400
+
+
+def test_api_add_group_internal(branch_client, branch_db):
+    resp = branch_client.post("/api/group", json={"name": "New Internal Group", "is_internal": True})
+    assert resp.status_code == 200
+    assert "group_id" in resp.json
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    row = conn.execute("SELECT is_internal FROM groups WHERE name = 'New Internal Group'").fetchone()
+    conn.close()
+    assert row["is_internal"] == 1
+
+
+def test_api_add_group_external(branch_client, branch_db):
+    resp = branch_client.post("/api/group", json={"name": "Partner Org", "is_internal": False})
+    assert resp.status_code == 200
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    row = conn.execute("SELECT is_internal FROM groups WHERE name = 'Partner Org'").fetchone()
+    conn.close()
+    assert row["is_internal"] == 0
+
+
+def test_api_add_group_duplicate_name(branch_client):
+    resp = branch_client.post("/api/group", json={"name": "Engineering"})
+    assert resp.status_code == 400
+    assert "already exists" in resp.json["error"]
+
+
+def test_api_add_group_defaults_to_internal(branch_client, branch_db):
+    resp = branch_client.post("/api/group", json={"name": "Default Group"})
+    assert resp.status_code == 200
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    row = conn.execute("SELECT is_internal FROM groups WHERE name = 'Default Group'").fetchone()
+    conn.close()
+    assert row["is_internal"] == 1
+
+
+# --- External group exclusion from reports ---
+
+@pytest.fixture
+def external_group_db(tmp_path):
+    """DB with one internal employee and one external employee."""
+    tsv = tmp_path / "data_anon.tsv"
+    db = tmp_path / "test_anon.db"
+    _write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "100.00%", ""],
+        ["External,Person", "PartnerOrg", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "50.00%", ""],
+    ])
+    load_tsv(tsv, db)
+    from sej.db import get_connection
+    conn = get_connection(db)
+    conn.execute("UPDATE groups SET is_internal = 0 WHERE name = 'PartnerOrg'")
+    conn.commit()
+    conn.close()
+    return db
+
+
+@pytest.fixture
+def external_group_client(external_group_db):
+    app = create_app(db_path=external_group_db)
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        yield c
+
+
+def test_nonproject_by_group_excludes_external(external_group_client):
+    data = external_group_client.get("/api/nonproject-by-group").json
+    groups = [r["group"] for r in data["rows"]]
+    assert "PartnerOrg" not in groups
+    assert "Engineering" in groups
+
+
+def test_nonproject_by_group_total_excludes_external(external_group_client):
+    # Only Smith,Jane (Engineering, 0% NP) counts — total should be 0%
+    data = external_group_client.get("/api/nonproject-by-group").json
+    total_row = data["rows"][-1]
+    assert total_row["group"] == "Total"
+    for month in data["months"]:
+        assert total_row[month] == 0.0
+
+
+def test_nonproject_by_person_excludes_external(external_group_client):
+    data = external_group_client.get("/api/nonproject-by-person").json
+    names = [r["name"] for r in data["rows"]]
+    assert "External,Person" not in names
+    assert "Smith,Jane" in names
+
+
+def test_nonproject_by_person_total_excludes_external(external_group_client):
+    # Only Smith,Jane (0% NP) counts — total should be 0%
+    data = external_group_client.get("/api/nonproject-by-person").json
+    total_row = data["rows"][-1]
+    assert total_row["name"] == "Total"
+    for month in data["months"]:
+        assert total_row[month] == 0.0
+
+
+# --- Project details external FTE row ---
+
+def test_api_project_details_external_fte_row_present(external_group_client):
+    # external_group_db: Smith,Jane (internal, 100%) and External,Person (external, 50%)
+    # both on project 5120001 in July 2025
+    data = external_group_client.get("/api/project-details?project=5120001").json
+    labels = [r["label"] for r in data["fte_rows"]]
+    assert "Internal FTE" in labels
+    assert "External FTE" in labels
+
+
+def test_api_project_details_external_fte_values(external_group_client):
+    data = external_group_client.get("/api/project-details?project=5120001").json
+    internal = next(r for r in data["fte_rows"] if r["label"] == "Internal FTE")
+    external = next(r for r in data["fte_rows"] if r["label"] == "External FTE")
+    assert abs(internal["July 2025"] - 1.0) < 0.01
+    assert abs(external["July 2025"] - 0.50) < 0.01
+
+
+def test_api_project_details_external_fte_row_absent_when_no_external(main_client):
+    # Base fixture has no external employees
+    data = main_client.get("/api/project-details?project=5120001").json
+    labels = [r["label"] for r in data["fte_rows"]]
+    assert "External FTE" not in labels

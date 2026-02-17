@@ -97,3 +97,34 @@ def test_effort_month_constraint(conn):
 
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO efforts (allocation_line_id, year, month, percentage) VALUES (?, 2025, 13, 50.0)", (line_id,))
+
+
+def test_group_is_internal_defaults_to_1(conn):
+    conn.execute("INSERT INTO groups (name) VALUES ('Alpha')")
+    row = conn.execute("SELECT is_internal FROM groups WHERE name='Alpha'").fetchone()
+    assert row["is_internal"] == 1
+
+
+def test_group_is_internal_can_be_set_to_0(conn):
+    conn.execute("INSERT INTO groups (name, is_internal) VALUES ('External Org', 0)")
+    row = conn.execute("SELECT is_internal FROM groups WHERE name='External Org'").fetchone()
+    assert row["is_internal"] == 0
+
+
+def test_create_schema_migrates_missing_is_internal():
+    """create_schema adds is_internal to an existing groups table that lacks it."""
+    import sqlite3 as _sqlite3
+    c = _sqlite3.connect(":memory:")
+    c.row_factory = _sqlite3.Row
+    # Simulate an old schema without is_internal
+    c.execute("CREATE TABLE groups (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL)")
+    c.execute("INSERT INTO groups (name) VALUES ('OldGroup')")
+    c.commit()
+
+    create_schema(c)
+
+    cols = {r[1] for r in c.execute("PRAGMA table_info(groups)").fetchall()}
+    assert "is_internal" in cols
+    row = c.execute("SELECT is_internal FROM groups WHERE name='OldGroup'").fetchone()
+    assert row["is_internal"] == 1  # migration default applied to existing rows
+    c.close()
