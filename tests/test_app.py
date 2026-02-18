@@ -264,6 +264,216 @@ def test_api_add_project(branch_client, branch_db):
     assert proj["name"] == "Brand New Project"
 
 
+def test_api_add_project_with_details(branch_client, branch_db):
+    employees = branch_client.get("/api/employees").json
+    internal = next(e for e in employees if e["is_internal"])
+    groups = branch_client.get("/api/groups").json
+    admin_group_id = groups[0]["id"]
+
+    resp = branch_client.post("/api/project", json={
+        "name": "Detailed Project",
+        "start_year": 2025,
+        "start_month": 1,
+        "end_year": 2027,
+        "end_month": 12,
+        "local_pi_id": internal["id"],
+        "personnel_budget": 750000.0,
+        "admin_group_id": admin_group_id,
+    })
+    assert resp.status_code == 200
+    code = resp.json["project_code"]
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    proj = conn.execute(
+        "SELECT * FROM projects WHERE project_code = ?", (code,)
+    ).fetchone()
+    conn.close()
+    assert proj["name"] == "Detailed Project"
+    assert proj["start_year"] == 2025
+    assert proj["start_month"] == 1
+    assert proj["end_year"] == 2027
+    assert proj["end_month"] == 12
+    assert proj["local_pi_id"] == internal["id"]
+    assert proj["personnel_budget"] == 750000.0
+    assert proj["admin_group_id"] == admin_group_id
+
+
+def test_api_add_project_external_pi_rejected(branch_client, branch_db):
+    """Local PI must be an internal employee."""
+    from sej.queries import add_group, add_employee
+    add_group(branch_db, "External Org", is_internal=False)
+    add_employee(branch_db, "External", "Person", "", "External Org")
+    employees = branch_client.get("/api/employees").json
+    external = next(e for e in employees if not e["is_internal"])
+
+    resp = branch_client.post("/api/project", json={
+        "name": "Bad PI Project",
+        "local_pi_id": external["id"],
+    })
+    assert resp.status_code == 400
+    assert "internal" in resp.json["error"]
+
+
+def test_api_add_project_unpaired_start_date_rejected(branch_client):
+    """start_year without start_month is rejected."""
+    resp = branch_client.post("/api/project", json={
+        "name": "Bad Dates",
+        "start_year": 2025,
+    })
+    assert resp.status_code == 400
+    assert "start_year" in resp.json["error"]
+
+
+def test_api_add_project_unpaired_end_date_rejected(branch_client):
+    """end_month without end_year is rejected."""
+    resp = branch_client.post("/api/project", json={
+        "name": "Bad Dates",
+        "end_month": 6,
+    })
+    assert resp.status_code == 400
+    assert "end_year" in resp.json["error"]
+
+
+def test_api_add_project_invalid_month_rejected(branch_client):
+    """Month outside 1-12 is rejected."""
+    resp = branch_client.post("/api/project", json={
+        "name": "Bad Month",
+        "start_year": 2025,
+        "start_month": 13,
+    })
+    assert resp.status_code == 400
+    assert "start_month" in resp.json["error"]
+
+
+def test_api_add_project_negative_budget_rejected(branch_client):
+    """Negative personnel budget is rejected."""
+    resp = branch_client.post("/api/project", json={
+        "name": "Bad Budget",
+        "personnel_budget": -100.0,
+    })
+    assert resp.status_code == 400
+    assert "personnel_budget" in resp.json["error"]
+
+
+def test_api_update_project_forbidden_on_main(client):
+    resp = client.put("/api/project", json={
+        "project_code": "5120001",
+        "name": "Updated Name",
+    })
+    assert resp.status_code == 403
+
+
+def test_api_update_project(branch_client, branch_db):
+    employees = branch_client.get("/api/employees").json
+    internal = next(e for e in employees if e["is_internal"])
+    groups = branch_client.get("/api/groups").json
+    admin_group_id = groups[0]["id"]
+
+    resp = branch_client.put("/api/project", json={
+        "project_code": "5120001",
+        "name": "Widget Project Updated",
+        "start_year": 2024,
+        "start_month": 6,
+        "end_year": 2026,
+        "end_month": 9,
+        "local_pi_id": internal["id"],
+        "personnel_budget": 500000.0,
+        "admin_group_id": admin_group_id,
+    })
+    assert resp.status_code == 200
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    proj = conn.execute(
+        "SELECT * FROM projects WHERE project_code = ?", ("5120001",)
+    ).fetchone()
+    conn.close()
+    assert proj["name"] == "Widget Project Updated"
+    assert proj["start_year"] == 2024
+    assert proj["start_month"] == 6
+    assert proj["end_year"] == 2026
+    assert proj["end_month"] == 9
+    assert proj["local_pi_id"] == internal["id"]
+    assert proj["personnel_budget"] == 500000.0
+    assert proj["admin_group_id"] == admin_group_id
+
+
+def test_api_update_project_external_pi_rejected(branch_client, branch_db):
+    """Local PI must be an internal employee."""
+    from sej.queries import add_group, add_employee
+    add_group(branch_db, "External Org", is_internal=False)
+    add_employee(branch_db, "External", "Person", "", "External Org")
+    employees = branch_client.get("/api/employees").json
+    external = next(e for e in employees if not e["is_internal"])
+
+    resp = branch_client.put("/api/project", json={
+        "project_code": "5120001",
+        "local_pi_id": external["id"],
+    })
+    assert resp.status_code == 400
+    assert "internal" in resp.json["error"]
+
+
+def test_api_update_project_not_found(branch_client):
+    resp = branch_client.put("/api/project", json={
+        "project_code": "NONEXISTENT",
+        "name": "Nope",
+    })
+    assert resp.status_code == 400
+
+
+def test_api_update_project_dates_reject_early_effort(branch_client):
+    """Setting start after existing effort is rejected."""
+    # 5120001 has effort in Jul 2025 and Aug 2025; start after that should fail
+    resp = branch_client.put("/api/project", json={
+        "project_code": "5120001",
+        "start_year": 2025,
+        "start_month": 8,  # Aug 2025 — Jul 2025 is before this
+    })
+    assert resp.status_code == 400
+    assert "Jul 2025" in resp.json["error"]
+
+
+def test_api_update_project_dates_reject_late_effort(branch_client):
+    """Setting end before existing effort is rejected."""
+    # 5120001 has effort in Aug 2025; end before that should fail
+    resp = branch_client.put("/api/project", json={
+        "project_code": "5120001",
+        "end_year": 2025,
+        "end_month": 7,  # Jul 2025 — Aug 2025 is after this
+    })
+    assert resp.status_code == 400
+    assert "Aug 2025" in resp.json["error"]
+
+
+def test_api_update_project_dates_accept_valid_range(branch_client):
+    """Setting dates that encompass all existing effort succeeds."""
+    resp = branch_client.put("/api/project", json={
+        "project_code": "5120001",
+        "start_year": 2025,
+        "start_month": 7,
+        "end_year": 2025,
+        "end_month": 8,
+    })
+    assert resp.status_code == 200
+
+
+def test_api_projects_returns_detail_fields(client):
+    resp = client.get("/api/projects")
+    assert resp.status_code == 200
+    proj = next(p for p in resp.json if p["project_code"] == "5120001")
+    assert "start_year" in proj
+    assert "start_month" in proj
+    assert "end_year" in proj
+    assert "end_month" in proj
+    assert "local_pi_id" in proj
+    assert "local_pi_name" in proj
+    assert "personnel_budget" in proj
+    assert "admin_group_id" in proj
+    assert "admin_group_name" in proj
+
+
 # --- Fix totals tests ---
 
 @pytest.fixture

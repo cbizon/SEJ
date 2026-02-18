@@ -27,6 +27,22 @@
         button { cursor: pointer; padding: 4px 10px; }
         #project-placeholder { color: #6c757d; font-style: italic; margin-top: 0.5rem; }
         #error { display: none; color: #dc3545; font-weight: 600; }
+        #project-info {
+            display: none;
+            margin: 0.75rem 0 1rem;
+            padding: 0.6rem 1rem;
+            background: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+        }
+        #project-info dl {
+            display: grid;
+            grid-template-columns: max-content 1fr;
+            gap: 0.2rem 1rem;
+            margin: 0;
+        }
+        #project-info dt { font-weight: 600; color: #495057; }
+        #project-info dd { margin: 0; }
         #people-table .tabulator-tableholder { padding-bottom: 17px; }
     </style>
 </head>
@@ -43,6 +59,10 @@
 
     <div id="error"></div>
     <p id="project-placeholder">Select a project above.</p>
+
+    <div id="project-info">
+        <dl id="project-info-dl"></dl>
+    </div>
 
     <div id="fte-section">
         <h2>Total FTE by Month</h2>
@@ -119,6 +139,35 @@
             dropdown.addEventListener("click", e => e.stopPropagation());
         }
 
+        function showProjectInfo(info) {
+            const panel = document.getElementById("project-info");
+            const dl = document.getElementById("project-info-dl");
+            dl.innerHTML = "";
+            if (!info) { panel.style.display = "none"; return; }
+
+            const fields = [
+                ["Local PI",           info.local_pi_name],
+                ["Admin Group",        info.admin_group_name],
+                ["Start",              info.start],
+                ["End",                info.end],
+                ["Personnel Budget",   info.personnel_budget != null
+                    ? "$" + info.personnel_budget.toLocaleString() : null],
+            ];
+
+            const populated = fields.filter(([, v]) => v != null);
+            if (populated.length === 0) { panel.style.display = "none"; return; }
+
+            populated.forEach(([label, value]) => {
+                const dt = document.createElement("dt");
+                dt.textContent = label;
+                const dd = document.createElement("dd");
+                dd.textContent = value;
+                dl.appendChild(dt);
+                dl.appendChild(dd);
+            });
+            panel.style.display = "block";
+        }
+
         function initTables(months, fte_rows, people) {
             document.getElementById("project-placeholder").style.display = "none";
 
@@ -155,14 +204,15 @@
 
         function loadProject(project) {
             document.getElementById("error").style.display = "none";
-            if (!project) return;
+            if (!project) { showProjectInfo(null); return; }
 
             fetch(`/api/project-details?project=${encodeURIComponent(project)}`)
                 .then(r => {
                     if (!r.ok) return r.text().then(t => { throw new Error(`Server error ${r.status}: ${t}`); });
                     return r.json();
                 })
-                .then(({ months, fte_rows, people }) => {
+                .then(({ months, fte_rows, people, project_info }) => {
+                    showProjectInfo(project_info);
                     if (fteTable === null) {
                         initTables(months, fte_rows, people);
                     } else {
