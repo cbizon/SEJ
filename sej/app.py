@@ -156,8 +156,9 @@ def create_app(db_path=None):
         middle_name = body.get("middle_name", "").strip()
         group_name = body["group_name"].strip()
 
+        salary = body.get("salary", 120000)
         try:
-            emp_id = add_employee(db, last_name, first_name, middle_name, group_name)
+            emp_id = add_employee(db, last_name, first_name, middle_name, group_name, salary)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         return jsonify({"employee_id": emp_id})

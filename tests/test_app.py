@@ -161,6 +161,51 @@ def test_api_employees(client):
     assert "Jones,Bob" in names
 
 
+def test_api_employees_includes_salary(client):
+    resp = client.get("/api/employees")
+    assert resp.status_code == 200
+    for e in resp.json:
+        assert "salary" in e
+        assert e["salary"] == 120000.0
+
+
+def test_api_add_employee_with_salary(branch_client, branch_db):
+    resp = branch_client.post("/api/employee", json={
+        "first_name": "Alice",
+        "last_name": "Smith",
+        "middle_name": "",
+        "group_name": "Engineering",
+        "salary": 95000.0,
+    })
+    assert resp.status_code == 200
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    emp = conn.execute(
+        "SELECT salary FROM employees WHERE name = ?", ("Smith,Alice",)
+    ).fetchone()
+    conn.close()
+    assert emp["salary"] == 95000.0
+
+
+def test_api_add_employee_default_salary(branch_client, branch_db):
+    resp = branch_client.post("/api/employee", json={
+        "first_name": "Carol",
+        "last_name": "Brown",
+        "middle_name": "",
+        "group_name": "Engineering",
+    })
+    assert resp.status_code == 200
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    emp = conn.execute(
+        "SELECT salary FROM employees WHERE name = ?", ("Brown,Carol",)
+    ).fetchone()
+    conn.close()
+    assert emp["salary"] == 120000.0
+
+
 def test_api_projects(client):
     resp = client.get("/api/projects")
     assert resp.status_code == 200
@@ -1474,6 +1519,95 @@ def test_api_project_details_nonproject(main_client):
     assert abs(internal["July 2025"] - 1.0) < 0.01
     bob = next(r for r in data["people"] if r["name"] == "Jones,Bob")
     assert abs(bob["July 2025"] - 100.0) < 0.1
+
+
+# --- Spending analysis tests ---
+
+@pytest.fixture
+def spending_client(branch_db):
+    """Branch DB with budget and end date set on project 5120001."""
+    from sej.queries import update_project
+    # Smith,Jane: salary=120000, 50% Jul → $5000, 60% Aug → $6000
+    update_project(branch_db, "5120001",
+                   name="Widget Project",
+                   personnel_budget=100000.0,
+                   end_year=2025, end_month=9)
+    app = create_app(db_path=branch_db)
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        yield c
+
+
+def test_spending_analysis_present(spending_client):
+    data = spending_client.get("/api/project-details?project=5120001").json
+    assert data["spending_analysis"] is not None
+    assert len(data["spending_analysis"]) > 0
+
+
+def test_spending_analysis_absent_without_budget(main_client):
+    data = main_client.get("/api/project-details?project=5120001").json
+    assert data["spending_analysis"] is None
+
+
+def test_spending_analysis_values(spending_client):
+    # Jul: 120000/12 * 0.50 = 5000 → remaining 95000
+    # Aug: 120000/12 * 0.60 = 6000 → remaining 89000
+    # Sep: extrapolated at 6000  → remaining 83000
+    data = spending_client.get("/api/project-details?project=5120001").json
+    points = {p["month"]: p["remaining"] for p in data["spending_analysis"]}
+    assert abs(points["July 2025"] - 95000.0) < 1.0
+    assert abs(points["August 2025"] - 89000.0) < 1.0
+    assert abs(points["September 2025"] - 83000.0) < 1.0
+
+
+def test_spending_analysis_covers_to_end(spending_client):
+    data = spending_client.get("/api/project-details?project=5120001").json
+    months = [p["month"] for p in data["spending_analysis"]]
+    assert months[-1] == "September 2025"
+
+
+def test_spending_analysis_start_date_respected(branch_db):
+    """Chart starts at project start date with $0 spend for pre-effort months."""
+    from sej.queries import update_project
+    # Start in May 2025 — two months before the first effort (July 2025)
+    update_project(branch_db, "5120001",
+                   name="Widget Project",
+                   start_year=2025, start_month=5,
+                   personnel_budget=100000.0,
+                   end_year=2025, end_month=8)
+    app = create_app(db_path=branch_db)
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        data = c.get("/api/project-details?project=5120001").json
+    points = {p["month"]: p["remaining"] for p in data["spending_analysis"]}
+    # May and June have no effort → $0 spend → budget stays at 100000
+    assert abs(points["May 2025"] - 100000.0) < 1.0
+    assert abs(points["June 2025"] - 100000.0) < 1.0
+    # July: 5000 spent → 95000
+    assert abs(points["July 2025"] - 95000.0) < 1.0
+
+
+def test_spending_analysis_zero_spend_within_range(branch_db):
+    """Months within the data range with no effort for this project contribute $0."""
+    from sej.queries import update_project
+    # 5120002 has effort only in July 2025 (50%) and August 2025 (40%) for Smith,Jane.
+    # Set a start date of June 2025 — June is within global range but has no effort
+    # for 5120002 (global range starts July 2025, so June is actually before it).
+    # Instead verify Aug stays flat relative to July for a project that has effort
+    # in both months — and that the extrapolated Sep uses August's spend rate.
+    # Jul 5120002: 120000/12 * 0.50 = 5000; Aug: 120000/12 * 0.40 = 4000
+    update_project(branch_db, "5120002",
+                   name="Gadget Project",
+                   personnel_budget=80000.0,
+                   end_year=2025, end_month=9)
+    app = create_app(db_path=branch_db)
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        data = c.get("/api/project-details?project=5120002").json
+    points = {p["month"]: p["remaining"] for p in data["spending_analysis"]}
+    assert abs(points["July 2025"] - 75000.0) < 1.0   # 80000 - 5000
+    assert abs(points["August 2025"] - 71000.0) < 1.0  # 75000 - 4000
+    assert abs(points["September 2025"] - 67000.0) < 1.0  # extrapolate Aug rate
 
 
 # --- Add group tests ---

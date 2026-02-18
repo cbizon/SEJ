@@ -184,6 +184,8 @@
             <input id="ae-middle-name" placeholder="Middle name">
             <label>Group</label>
             <select id="ae-group"></select>
+            <label>Salary</label>
+            <input id="ae-salary" type="number" min="0" step="1000" value="120000">
             <div class="btn-row">
                 <button id="ae-cancel">Cancel</button>
                 <button id="ae-submit">Add</button>
@@ -685,6 +687,7 @@
                     document.getElementById("ae-first-name").value = "";
                     document.getElementById("ae-last-name").value = "";
                     document.getElementById("ae-middle-name").value = "";
+                    document.getElementById("ae-salary").value = "120000";
 
                     fetch("/api/groups").then(r => r.json()).then(groups => {
                         const sel = document.getElementById("ae-group");
@@ -709,6 +712,7 @@
                     const lastName = document.getElementById("ae-last-name").value.trim();
                     const middleName = document.getElementById("ae-middle-name").value.trim();
                     const groupName = document.getElementById("ae-group").value;
+                    const salary = parseFloat(document.getElementById("ae-salary").value);
                     if (!firstName || !lastName) {
                         alert("First name and last name are required.");
                         return;
@@ -721,6 +725,7 @@
                             last_name: lastName,
                             middle_name: middleName,
                             group_name: groupName,
+                            salary: isNaN(salary) ? 120000 : salary,
                         }),
                     })
                     .then(r => {
