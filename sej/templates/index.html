@@ -196,12 +196,13 @@
     <div id="add-project-overlay">
         <div id="add-row-form">
             <h3 id="ap-title" style="margin-top:0">Add Project</h3>
-            <label>Edit existing project <span style="font-weight:normal;font-size:0.9em">(or leave on "New" to add)</span></label>
-            <select id="ap-select">
-                <option value="">— New project —</option>
-            </select>
-            <label>Project Name</label>
-            <input id="ap-name" placeholder="Enter project name">
+            <label>Edit existing project <span style="font-weight:normal;font-size:0.9em">(leave blank to add new)</span></label>
+            <input id="ap-select" list="ap-select-list" autocomplete="off" placeholder="Type or select existing project">
+            <datalist id="ap-select-list"></datalist>
+            <div id="ap-name-row">
+                <label>Project Name</label>
+                <input id="ap-name" placeholder="Enter project name">
+            </div>
             <label>Start <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
             <div style="display:flex;gap:8px">
                 <select id="ap-start-month" style="flex:1">
@@ -229,9 +230,8 @@
                 <input id="ap-end-year" type="number" placeholder="Year" style="width:80px">
             </div>
             <label>Local PI <span style="font-weight:normal;font-size:0.9em">(optional, internal employees only)</span></label>
-            <select id="ap-pi">
-                <option value="">— None —</option>
-            </select>
+            <input id="ap-pi" list="ap-pi-list" autocomplete="off" placeholder="Type to search">
+            <datalist id="ap-pi-list"></datalist>
             <label>Administrative Group <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
             <select id="ap-admin-group">
                 <option value="">— None —</option>
@@ -821,49 +821,54 @@
 
                 // Add/Edit project
                 let apProjectsData = [];
+                let apPiMap = {};  // employee name → id, for internal employees
 
                 function apSetMode(isEdit) {
                     document.getElementById("ap-title").textContent = isEdit ? "Edit Project" : "Add Project";
                     document.getElementById("ap-submit").textContent = isEdit ? "Update" : "Add";
+                    document.getElementById("ap-name-row").style.display = isEdit ? "none" : "";
                 }
 
-                function apPopulateFromProject(proj) {
-                    document.getElementById("ap-name").value = proj.name || "";
-                    document.getElementById("ap-start-month").value = proj.start_month || "";
-                    document.getElementById("ap-start-year").value = proj.start_year || "";
-                    document.getElementById("ap-end-month").value = proj.end_month || "";
-                    document.getElementById("ap-end-year").value = proj.end_year || "";
-                    document.getElementById("ap-pi").value = proj.local_pi_id || "";
-                    document.getElementById("ap-budget").value = proj.personnel_budget != null ? proj.personnel_budget : "";
-                    document.getElementById("ap-admin-group").value = proj.admin_group_id || "";
-                }
-
-                document.getElementById("ap-select").addEventListener("change", () => {
-                    const code = document.getElementById("ap-select").value;
-                    if (code) {
-                        const proj = apProjectsData.find(p => p.project_code === code);
-                        if (proj) apPopulateFromProject(proj);
-                        apSetMode(true);
-                    } else {
-                        document.getElementById("ap-name").value = "";
-                        document.getElementById("ap-start-month").value = "";
-                        document.getElementById("ap-start-year").value = "";
-                        document.getElementById("ap-end-month").value = "";
-                        document.getElementById("ap-end-year").value = "";
-                        document.getElementById("ap-pi").value = "";
-                        document.getElementById("ap-budget").value = "";
-                        apSetMode(false);
-                    }
-                });
-
-                document.getElementById("add-project-btn").addEventListener("click", () => {
-                    // Reset form
+                function apClearFields() {
                     document.getElementById("ap-name").value = "";
                     document.getElementById("ap-start-month").value = "";
                     document.getElementById("ap-start-year").value = "";
                     document.getElementById("ap-end-month").value = "";
                     document.getElementById("ap-end-year").value = "";
+                    document.getElementById("ap-pi").value = "";
                     document.getElementById("ap-budget").value = "";
+                    document.getElementById("ap-admin-group").value = "";
+                }
+
+                function apPopulateFromProject(proj) {
+                    document.getElementById("ap-start-month").value = proj.start_month || "";
+                    document.getElementById("ap-start-year").value = proj.start_year || "";
+                    document.getElementById("ap-end-month").value = proj.end_month || "";
+                    document.getElementById("ap-end-year").value = proj.end_year || "";
+                    document.getElementById("ap-pi").value = proj.local_pi_name || "";
+                    document.getElementById("ap-budget").value = proj.personnel_budget != null ? proj.personnel_budget : "";
+                    document.getElementById("ap-admin-group").value = proj.admin_group_id || "";
+                }
+
+                function apCodeFromInput() {
+                    return document.getElementById("ap-select").value.trim().split(" \u2014 ")[0].trim();
+                }
+
+                document.getElementById("ap-select").addEventListener("input", () => {
+                    const val = document.getElementById("ap-select").value.trim();
+                    const proj = apProjectsData.find(p => p.project_code === apCodeFromInput());
+                    if (proj) {
+                        apPopulateFromProject(proj);
+                        apSetMode(true);
+                    } else if (!val) {
+                        apClearFields();
+                        apSetMode(false);
+                    }
+                });
+
+                document.getElementById("add-project-btn").addEventListener("click", () => {
+                    document.getElementById("ap-select").value = "";
+                    apClearFields();
                     apSetMode(false);
 
                     Promise.all([
@@ -873,27 +878,25 @@
                     ]).then(([projects, employees, groups]) => {
                         apProjectsData = projects;
 
-                        // Populate project selector
-                        const sel = document.getElementById("ap-select");
-                        sel.innerHTML = '<option value="">— New project —</option>';
+                        // Populate project datalist — value includes code and name
+                        const dl = document.getElementById("ap-select-list");
+                        dl.innerHTML = "";
                         projects.forEach(p => {
                             const opt = document.createElement("option");
-                            opt.value = p.project_code;
-                            opt.textContent = p.project_code + (p.name ? " — " + p.name : "");
-                            sel.appendChild(opt);
+                            opt.value = p.name ? p.project_code + " \u2014 " + p.name : p.project_code;
+                            dl.appendChild(opt);
                         });
-                        sel.value = "";
 
-                        // Populate Local PI selector — internal employees only
-                        const piSel = document.getElementById("ap-pi");
-                        piSel.innerHTML = '<option value="">— None —</option>';
+                        // Populate Local PI datalist — internal employees only
+                        apPiMap = {};
+                        const piDl = document.getElementById("ap-pi-list");
+                        piDl.innerHTML = "";
                         employees.filter(e => e.is_internal).forEach(e => {
                             const opt = document.createElement("option");
-                            opt.value = e.id;
-                            opt.textContent = e.name;
-                            piSel.appendChild(opt);
+                            opt.value = e.name;
+                            piDl.appendChild(opt);
+                            apPiMap[e.name] = e.id;
                         });
-                        piSel.value = "";
 
                         // Populate admin group selector — all groups
                         const agSel = document.getElementById("ap-admin-group");
@@ -915,17 +918,18 @@
                 });
 
                 document.getElementById("ap-submit").addEventListener("click", () => {
-                    const selectedCode = document.getElementById("ap-select").value;
+                    const selectedCode = apCodeFromInput();
+                    const isEdit = !!apProjectsData.find(p => p.project_code === selectedCode);
                     const name = document.getElementById("ap-name").value.trim();
                     const startMonth = document.getElementById("ap-start-month").value;
                     const startYear = document.getElementById("ap-start-year").value;
                     const endMonth = document.getElementById("ap-end-month").value;
                     const endYear = document.getElementById("ap-end-year").value;
-                    const piId = document.getElementById("ap-pi").value;
+                    const piName = document.getElementById("ap-pi").value.trim();
                     const budget = document.getElementById("ap-budget").value;
                     const adminGroupId = document.getElementById("ap-admin-group").value;
 
-                    if (!selectedCode && !name) {
+                    if (!isEdit && !name) {
                         alert("Project name is required for a new project.");
                         return;
                     }
@@ -936,12 +940,11 @@
                         start_year: startYear ? parseInt(startYear) : null,
                         end_month: endMonth ? parseInt(endMonth) : null,
                         end_year: endYear ? parseInt(endYear) : null,
-                        local_pi_id: piId ? parseInt(piId) : null,
+                        local_pi_id: piName ? (apPiMap[piName] || null) : null,
                         personnel_budget: budget !== "" ? parseFloat(budget) : null,
                         admin_group_id: adminGroupId ? parseInt(adminGroupId) : null,
                     };
 
-                    const isEdit = !!selectedCode;
                     if (isEdit) payload.project_code = selectedCode;
 
                     fetch("/api/project", {
