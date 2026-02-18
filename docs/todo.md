@@ -4,14 +4,6 @@
 
 Suppose that you have your version running, and a new IET comes out - don't overwrite it, but do the comparisons and make a series of accept/deny click boxes?
 
-## Add project details
-
-Start / End dates, budget, PI
-
-## Add employee details
-
-Salaries would allow turning various percentages into dollars.  It would also improve project detail pages, because you could calculate burn rate.
-
 ## Better non-project handling
 
 There are different types of non-project rows.  I'm not sure what they are, so they weren't carefully considered
