@@ -49,10 +49,10 @@ where the original data has `Project Id = N/A`).
 | `id` | integer | PK |
 | `project_code` | text | UNIQUE NOT NULL |
 | `name` | text | |
-| `start_year` | integer | optional |
-| `start_month` | integer | optional, 1–12 |
-| `end_year` | integer | optional |
-| `end_month` | integer | optional, 1–12 |
+| `start_year` | integer | optional — must be paired with `start_month` |
+| `start_month` | integer | optional, 1–12 — must be paired with `start_year` |
+| `end_year` | integer | optional — must be paired with `end_month` |
+| `end_month` | integer | optional, 1–12 — must be paired with `end_year` |
 | `local_pi_id` | integer | FK → employees.id, optional — must be an internal employee |
 | `personnel_budget` | real | optional |
 | `admin_group_id` | integer | FK → groups.id, optional — may be internal or external |

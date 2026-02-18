@@ -668,6 +668,31 @@ def _validate_project_dates(
             )
 
 
+def _validate_project_fields(
+    start_year: int | None,
+    start_month: int | None,
+    end_year: int | None,
+    end_month: int | None,
+    personnel_budget: float | None,
+) -> None:
+    """Validate shared constraints for add/update project.
+
+    Raises ValueError if:
+    - year and month are not both set or both None for a date bound
+    - a month value is outside 1-12
+    - personnel_budget is negative
+    """
+    if (start_year is None) != (start_month is None):
+        raise ValueError("start_year and start_month must both be set or both be empty")
+    if (end_year is None) != (end_month is None):
+        raise ValueError("end_year and end_month must both be set or both be empty")
+    for label, val in [("start_month", start_month), ("end_month", end_month)]:
+        if val is not None and not (1 <= val <= 12):
+            raise ValueError(f"{label} must be between 1 and 12")
+    if personnel_budget is not None and personnel_budget < 0:
+        raise ValueError("personnel_budget must not be negative")
+
+
 def add_project(
     db_path: str | Path,
     name: str,
@@ -683,8 +708,11 @@ def add_project(
 
     Finds the maximum numeric project code and increments by 1.
     Returns the new project_code.
-    Raises ValueError if local_pi_id refers to an external employee.
+    Raises ValueError if local_pi_id refers to an external employee,
+    date year/month are not paired, months are out of range, or budget
+    is negative.
     """
+    _validate_project_fields(start_year, start_month, end_year, end_month, personnel_budget)
     conn = get_connection(db_path)
     if local_pi_id is not None:
         _validate_local_pi(conn, local_pi_id)
@@ -720,12 +748,15 @@ def update_project(
     personnel_budget: float | None = None,
     admin_group_id: int | None = None,
 ) -> None:
-    """Update detail fields on an existing project.
+    """Update all detail fields on an existing project.
 
-    Only fields that are explicitly passed (including None to clear) are updated.
-    Raises ValueError if the project_code does not exist, or if local_pi_id
-    refers to an external employee.
+    All fields are written on every call — pass None to clear a field.
+    Raises ValueError if the project_code does not exist, local_pi_id
+    refers to an external employee, date year/month are not paired,
+    months are out of range, budget is negative, or effort exists outside
+    the given dates.
     """
+    _validate_project_fields(start_year, start_month, end_year, end_month, personnel_budget)
     conn = get_connection(db_path)
     existing = conn.execute(
         "SELECT id FROM projects WHERE project_code = ?", (project_code,)

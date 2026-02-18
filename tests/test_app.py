@@ -315,6 +315,47 @@ def test_api_add_project_external_pi_rejected(branch_client, branch_db):
     assert "internal" in resp.json["error"]
 
 
+def test_api_add_project_unpaired_start_date_rejected(branch_client):
+    """start_year without start_month is rejected."""
+    resp = branch_client.post("/api/project", json={
+        "name": "Bad Dates",
+        "start_year": 2025,
+    })
+    assert resp.status_code == 400
+    assert "start_year" in resp.json["error"]
+
+
+def test_api_add_project_unpaired_end_date_rejected(branch_client):
+    """end_month without end_year is rejected."""
+    resp = branch_client.post("/api/project", json={
+        "name": "Bad Dates",
+        "end_month": 6,
+    })
+    assert resp.status_code == 400
+    assert "end_year" in resp.json["error"]
+
+
+def test_api_add_project_invalid_month_rejected(branch_client):
+    """Month outside 1-12 is rejected."""
+    resp = branch_client.post("/api/project", json={
+        "name": "Bad Month",
+        "start_year": 2025,
+        "start_month": 13,
+    })
+    assert resp.status_code == 400
+    assert "start_month" in resp.json["error"]
+
+
+def test_api_add_project_negative_budget_rejected(branch_client):
+    """Negative personnel budget is rejected."""
+    resp = branch_client.post("/api/project", json={
+        "name": "Bad Budget",
+        "personnel_budget": -100.0,
+    })
+    assert resp.status_code == 400
+    assert "personnel_budget" in resp.json["error"]
+
+
 def test_api_update_project_forbidden_on_main(client):
     resp = client.put("/api/project", json={
         "project_code": "5120001",
