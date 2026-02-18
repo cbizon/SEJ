@@ -31,3 +31,11 @@ Moving to a multi-user setup would also require at least authentication, and pro
 ## Scenario planning
 
 The branch system is the core, but how would you extend it to allow for looking at different scenarios?
+
+## Make a proper changelog
+
+At the moment we have the TSVs but they shoudl probably be collected into a database
+
+## "Expected" things
+
+Is there a special category for expected or probable things?  For instance, TIC ends in three months, but we anticipate an extension.  Or we anticipate an NCE on something.  Do we just assume those as True or do we want some kind of a marker? 
