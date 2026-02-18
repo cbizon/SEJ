@@ -20,10 +20,14 @@ def create_schema(conn: sqlite3.Connection) -> None:
         );
 
         CREATE TABLE IF NOT EXISTS employees (
-            id       INTEGER PRIMARY KEY,
-            name     TEXT    UNIQUE NOT NULL,
-            group_id INTEGER NOT NULL REFERENCES groups(id),
-            salary   REAL    NOT NULL DEFAULT 120000
+            id          INTEGER PRIMARY KEY,
+            name        TEXT    UNIQUE NOT NULL,
+            group_id    INTEGER NOT NULL REFERENCES groups(id),
+            salary      REAL    NOT NULL DEFAULT 120000,
+            start_year  INTEGER,
+            start_month INTEGER CHECK (start_month BETWEEN 1 AND 12),
+            end_year    INTEGER,
+            end_month   INTEGER CHECK (end_month BETWEEN 1 AND 12)
         );
 
         CREATE TABLE IF NOT EXISTS projects (
@@ -83,6 +87,16 @@ def create_schema(conn: sqlite3.Connection) -> None:
     employee_cols = {r[1] for r in conn.execute("PRAGMA table_info(employees)").fetchall()}
     if "salary" not in employee_cols:
         conn.execute("ALTER TABLE employees ADD COLUMN salary REAL NOT NULL DEFAULT 120000")
+
+    # Migration: add start/end date columns to employees if they don't exist (for older DBs)
+    for col, definition in [
+        ("start_year",  "INTEGER"),
+        ("start_month", "INTEGER CHECK (start_month BETWEEN 1 AND 12)"),
+        ("end_year",    "INTEGER"),
+        ("end_month",   "INTEGER CHECK (end_month BETWEEN 1 AND 12)"),
+    ]:
+        if col not in employee_cols:
+            conn.execute(f"ALTER TABLE employees ADD COLUMN {col} {definition}")
 
     # Migration: add new project detail columns if they don't exist (for older DBs)
     project_cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}

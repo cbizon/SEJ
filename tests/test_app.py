@@ -1396,6 +1396,58 @@ def test_api_project_details_months(main_client):
     assert "August 2025" in data["months"]
 
 
+def test_api_project_details_start_date_filters_months(tmp_path):
+    """Months before the project start date are excluded from the display."""
+    # 5120001 has no effort in July (so start=August is valid).
+    # Jones,Bob has effort in July → July is in global months but not 5120001's range.
+    tsv = tmp_path / "data_anon.tsv"
+    db = tmp_path / "test_anon.db"
+    _write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "0.00%", "60.00%"],
+        ["Jones,Bob", "Ops", "20152", "12001", "512120",
+         "", "", "", "VROPS", "N/A", "N/A",
+         "100.00%", "100.00%"],
+    ])
+    load_tsv(tsv, db)
+    from sej.queries import update_project
+    update_project(db, "5120001", name="Widget Project",
+                   start_year=2025, start_month=8)
+    app = create_app(db_path=db)
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        data = c.get("/api/project-details?project=5120001").json
+    assert "July 2025" not in data["months"]
+    assert "August 2025" in data["months"]
+
+
+def test_api_project_details_end_date_filters_months(tmp_path):
+    """Months after the project end date are excluded from the display."""
+    # 5120001 has no effort in August (so end=July is valid).
+    # Jones,Bob has effort in August → August is in global months but not 5120001's range.
+    tsv = tmp_path / "data_anon.tsv"
+    db = tmp_path / "test_anon.db"
+    _write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "50.00%", "0.00%"],
+        ["Jones,Bob", "Ops", "20152", "12001", "512120",
+         "", "", "", "VROPS", "N/A", "N/A",
+         "100.00%", "100.00%"],
+    ])
+    load_tsv(tsv, db)
+    from sej.queries import update_project
+    update_project(db, "5120001", name="Widget Project",
+                   end_year=2025, end_month=7)
+    app = create_app(db_path=db)
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        data = c.get("/api/project-details?project=5120001").json
+    assert "July 2025" in data["months"]
+    assert "August 2025" not in data["months"]
+
+
 def test_api_project_details_fte_label(main_client):
     data = main_client.get("/api/project-details?project=5120001").json
     assert data["fte_rows"][0]["label"] == "Internal FTE"
@@ -1755,3 +1807,376 @@ def test_api_project_details_external_fte_row_absent_when_no_external(main_clien
     data = main_client.get("/api/project-details?project=5120001").json
     labels = [r["label"] for r in data["fte_rows"]]
     assert "External FTE" not in labels
+
+
+# --- Employee start/end date tests ---
+
+def test_get_employees_includes_date_fields(client):
+    """GET /api/employees includes start/end date fields."""
+    resp = client.get("/api/employees")
+    assert resp.status_code == 200
+    for emp in resp.json:
+        assert "start_year" in emp
+        assert "start_month" in emp
+        assert "end_year" in emp
+        assert "end_month" in emp
+
+
+def test_api_update_employee_forbidden_on_main(client):
+    """PUT /api/employee returns 403 on main DB."""
+    resp = client.put("/api/employee", json={"employee_id": 1})
+    assert resp.status_code == 403
+
+
+def test_api_update_employee_sets_dates(branch_client, branch_db):
+    """PUT /api/employee sets start/end date fields."""
+    employees = branch_client.get("/api/employees").json
+    emp_id = next(e["id"] for e in employees if e["name"] == "Smith,Jane")
+
+    resp = branch_client.put("/api/employee", json={
+        "employee_id": emp_id,
+        "start_year": 2025,
+        "start_month": 7,
+        "end_year": 2025,
+        "end_month": 8,
+    })
+    assert resp.status_code == 200
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    emp = conn.execute("SELECT * FROM employees WHERE id = ?", (emp_id,)).fetchone()
+    conn.close()
+    assert emp["start_year"] == 2025
+    assert emp["start_month"] == 7
+    assert emp["end_year"] == 2025
+    assert emp["end_month"] == 8
+
+
+def test_api_update_employee_clears_dates(branch_client, branch_db):
+    """Sending no date fields clears previously set dates."""
+    employees = branch_client.get("/api/employees").json
+    emp_id = next(e["id"] for e in employees if e["name"] == "Smith,Jane")
+
+    # First set dates (Jul–Aug 2025 encompasses all existing effort)
+    branch_client.put("/api/employee", json={
+        "employee_id": emp_id,
+        "start_year": 2025,
+        "start_month": 7,
+        "end_year": 2025,
+        "end_month": 8,
+    })
+
+    # Clear by omitting date fields
+    resp = branch_client.put("/api/employee", json={"employee_id": emp_id})
+    assert resp.status_code == 200
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    emp = conn.execute("SELECT * FROM employees WHERE id = ?", (emp_id,)).fetchone()
+    conn.close()
+    assert emp["start_year"] is None
+    assert emp["start_month"] is None
+    assert emp["end_year"] is None
+    assert emp["end_month"] is None
+
+
+def test_api_update_employee_rejects_start_without_month(branch_client):
+    """start_year without start_month is rejected."""
+    employees = branch_client.get("/api/employees").json
+    emp_id = employees[0]["id"]
+
+    resp = branch_client.put("/api/employee", json={
+        "employee_id": emp_id,
+        "start_year": 2025,
+    })
+    assert resp.status_code == 400
+    assert "start_year" in resp.json["error"]
+
+
+def test_api_update_employee_rejects_conflicting_start(branch_client):
+    """Setting start after existing effort is rejected."""
+    employees = branch_client.get("/api/employees").json
+    emp_id = next(e["id"] for e in employees if e["name"] == "Smith,Jane")
+
+    # Smith,Jane has effort in Jul 2025; start=Aug 2025 would conflict
+    resp = branch_client.put("/api/employee", json={
+        "employee_id": emp_id,
+        "start_year": 2025,
+        "start_month": 8,
+    })
+    assert resp.status_code == 400
+    assert "Jul 2025" in resp.json["error"]
+
+
+def test_api_update_employee_rejects_conflicting_end(branch_client):
+    """Setting end before existing effort is rejected."""
+    employees = branch_client.get("/api/employees").json
+    emp_id = next(e["id"] for e in employees if e["name"] == "Smith,Jane")
+
+    # Smith,Jane has effort in Aug 2025; end=Jul 2025 would conflict
+    resp = branch_client.put("/api/employee", json={
+        "employee_id": emp_id,
+        "end_year": 2025,
+        "end_month": 7,
+    })
+    assert resp.status_code == 400
+    assert "Aug 2025" in resp.json["error"]
+
+
+# --- fix_totals respects employee date bounds ---
+
+def test_fix_totals_skips_months_before_employee_start(tmp_path):
+    """Employee with start=Aug 2025; July shortfall is left alone by fix_totals."""
+    tsv = tmp_path / "data_anon.tsv"
+    db = tmp_path / "test_anon.db"
+    _write_tsv(tsv, [
+        # Smith,Jane: 90% in July (shortfall), 100% in August
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "90.00%", "100.00%"],
+        # Jones,Bob: always 100%
+        ["Jones,Bob", "Ops", "20152", "12001", "512120",
+         "", "", "", "VROPS", "N/A", "N/A",
+         "100.00%", "100.00%"],
+    ])
+    load_tsv(tsv, db)
+
+    # Set Smith,Jane start = Aug 2025 directly (bypassing conflict check since
+    # we want to test that fix_totals skips, not that update_employee validates)
+    from sej.db import get_connection
+    conn = get_connection(db)
+    conn.execute(
+        "UPDATE employees SET start_year=2025, start_month=8 WHERE name='Smith,Jane'"
+    )
+    conn.commit()
+    conn.close()
+
+    branch_db = create_branch(db, "test_fix_start")
+    app_inst = create_app(db_path=branch_db)
+    app_inst.config["TESTING"] = True
+    with app_inst.test_client() as c:
+        resp = c.post("/api/fix-totals")
+    assert resp.status_code == 200
+    # Smith,Jane's July shortfall should NOT be fixed (not active in July)
+    assert resp.json["changes"] == [], f"Expected no changes, got {resp.json['changes']}"
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    al = conn.execute("""
+        SELECT al.id FROM allocation_lines al
+        JOIN employees e ON e.id = al.employee_id
+        JOIN projects p ON p.id = al.project_id
+        WHERE e.name = 'Smith,Jane' AND p.project_code = '5120001'
+    """).fetchone()
+    effort = conn.execute(
+        "SELECT percentage FROM efforts WHERE allocation_line_id = ? AND year=2025 AND month=7",
+        (al["id"],),
+    ).fetchone()
+    conn.close()
+    assert abs(effort["percentage"] - 90.0) < 0.01
+
+
+def test_fix_totals_skips_months_after_employee_end(tmp_path):
+    """Employee with end=Jul 2025; August shortfall is left alone by fix_totals."""
+    tsv = tmp_path / "data_anon.tsv"
+    db = tmp_path / "test_anon.db"
+    _write_tsv(tsv, [
+        # Smith,Jane: 100% in July, 90% in August (shortfall)
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "100.00%", "90.00%"],
+        # Jones,Bob: always 100%
+        ["Jones,Bob", "Ops", "20152", "12001", "512120",
+         "", "", "", "VROPS", "N/A", "N/A",
+         "100.00%", "100.00%"],
+    ])
+    load_tsv(tsv, db)
+
+    from sej.db import get_connection
+    conn = get_connection(db)
+    conn.execute(
+        "UPDATE employees SET end_year=2025, end_month=7 WHERE name='Smith,Jane'"
+    )
+    conn.commit()
+    conn.close()
+
+    branch_db = create_branch(db, "test_fix_end")
+    app_inst = create_app(db_path=branch_db)
+    app_inst.config["TESTING"] = True
+    with app_inst.test_client() as c:
+        resp = c.post("/api/fix-totals")
+    assert resp.status_code == 200
+    # Smith,Jane's August shortfall should NOT be fixed (not active in August)
+    assert resp.json["changes"] == [], f"Expected no changes, got {resp.json['changes']}"
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    al = conn.execute("""
+        SELECT al.id FROM allocation_lines al
+        JOIN employees e ON e.id = al.employee_id
+        JOIN projects p ON p.id = al.project_id
+        WHERE e.name = 'Smith,Jane' AND p.project_code = '5120001'
+    """).fetchone()
+    effort = conn.execute(
+        "SELECT percentage FROM efforts WHERE allocation_line_id = ? AND year=2025 AND month=8",
+        (al["id"],),
+    ).fetchone()
+    conn.close()
+    assert abs(effort["percentage"] - 90.0) < 0.01
+
+
+# --- update_effort respects employee date bounds ---
+
+def test_update_effort_rejects_before_employee_start(branch_db):
+    """update_effort raises ValueError when month is before employee start."""
+    from sej.queries import update_effort
+    from sej.db import get_connection
+
+    conn = get_connection(branch_db)
+    emp = conn.execute(
+        "SELECT id FROM employees WHERE name = 'Smith,Jane'"
+    ).fetchone()
+    conn.execute(
+        "UPDATE employees SET start_year=2025, start_month=8 WHERE id=?", (emp["id"],)
+    )
+    al = conn.execute(
+        "SELECT id FROM allocation_lines WHERE employee_id = ? LIMIT 1", (emp["id"],)
+    ).fetchone()
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(ValueError, match="before"):
+        update_effort(branch_db, al["id"], 2025, 7, 50.0)
+
+
+def test_update_effort_rejects_after_employee_end(branch_db):
+    """update_effort raises ValueError when month is after employee end."""
+    from sej.queries import update_effort
+    from sej.db import get_connection
+
+    conn = get_connection(branch_db)
+    emp = conn.execute(
+        "SELECT id FROM employees WHERE name = 'Smith,Jane'"
+    ).fetchone()
+    conn.execute(
+        "UPDATE employees SET end_year=2025, end_month=7 WHERE id=?", (emp["id"],)
+    )
+    al = conn.execute(
+        "SELECT id FROM allocation_lines WHERE employee_id = ? LIMIT 1", (emp["id"],)
+    ).fetchone()
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(ValueError, match="after"):
+        update_effort(branch_db, al["id"], 2025, 8, 50.0)
+
+
+def test_update_effort_allows_deletion_outside_range(branch_db):
+    """Deleting effort (percentage=None) is allowed even outside employee's range."""
+    from sej.queries import update_effort
+    from sej.db import get_connection
+
+    conn = get_connection(branch_db)
+    emp = conn.execute(
+        "SELECT id FROM employees WHERE name = 'Smith,Jane'"
+    ).fetchone()
+    conn.execute(
+        "UPDATE employees SET start_year=2025, start_month=8 WHERE id=?", (emp["id"],)
+    )
+    al = conn.execute(
+        "SELECT id FROM allocation_lines WHERE employee_id = ? LIMIT 1", (emp["id"],)
+    ).fetchone()
+    conn.commit()
+    conn.close()
+
+    # Deleting July effort should not raise even though July < Aug 2025 start
+    update_effort(branch_db, al["id"], 2025, 7, None)
+
+
+# --- Importer preserves employee dates across reload ---
+
+def test_importer_preserves_employee_dates_across_reload(tmp_path):
+    """Employee start/end dates survive a TSV reload."""
+    tsv = tmp_path / "data_anon.tsv"
+    db = tmp_path / "test_anon.db"
+    # Only August effort so start=Aug 2025 won't conflict
+    _write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "", "50.00%"],
+        ["Jones,Bob", "Ops", "20152", "12001", "512120",
+         "", "", "", "VROPS", "N/A", "N/A",
+         "", "100.00%"],
+    ])
+    load_tsv(tsv, db)
+
+    from sej.db import get_connection
+    conn = get_connection(db)
+    conn.execute(
+        "UPDATE employees SET start_year=2025, start_month=8 WHERE name='Smith,Jane'"
+    )
+    conn.commit()
+    conn.close()
+
+    # Reload the same TSV — dates should be preserved
+    load_tsv(tsv, db)
+
+    conn = get_connection(db)
+    emp = conn.execute(
+        "SELECT start_year, start_month FROM employees WHERE name='Smith,Jane'"
+    ).fetchone()
+    conn.close()
+    assert emp["start_year"] == 2025
+    assert emp["start_month"] == 8
+
+
+def test_importer_raises_on_effort_outside_employee_start(tmp_path):
+    """Loading TSV with effort before employee start raises ValueError."""
+    tsv = tmp_path / "data_anon.tsv"
+    db = tmp_path / "test_anon.db"
+    # TSV has July effort
+    _write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "50.00%", ""],
+    ])
+    load_tsv(tsv, db)
+
+    # Set start=Aug 2025 directly
+    from sej.db import get_connection
+    conn = get_connection(db)
+    conn.execute(
+        "UPDATE employees SET start_year=2025, start_month=8 WHERE name='Smith,Jane'"
+    )
+    conn.commit()
+    conn.close()
+
+    # Reload should fail: July effort is before Aug 2025 start
+    with pytest.raises(ValueError, match="before"):
+        load_tsv(tsv, db)
+
+
+def test_importer_raises_on_effort_outside_employee_end(tmp_path):
+    """Loading TSV with effort after employee end raises ValueError."""
+    tsv = tmp_path / "data_anon.tsv"
+    db = tmp_path / "test_anon.db"
+    # TSV has August effort
+    _write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "", "50.00%"],
+    ])
+    load_tsv(tsv, db)
+
+    # Set end=Jul 2025 directly
+    from sej.db import get_connection
+    conn = get_connection(db)
+    conn.execute(
+        "UPDATE employees SET end_year=2025, end_month=7 WHERE name='Smith,Jane'"
+    )
+    conn.commit()
+    conn.close()
+
+    # Reload should fail: August effort is after Jul 2025 end
+    with pytest.raises(ValueError, match="after"):
+        load_tsv(tsv, db)

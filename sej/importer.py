@@ -70,6 +70,15 @@ def load_tsv(tsv_path: str | Path, db_path: str | Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection(db_path)
     create_schema(conn)
+
+    # Save employee date ranges before clearing so they can be restored after reload
+    saved_dates = {
+        r["name"]: (r["start_year"], r["start_month"], r["end_year"], r["end_month"])
+        for r in conn.execute(
+            "SELECT name, start_year, start_month, end_year, end_month FROM employees"
+        ).fetchall()
+    }
+
     _clear_data(conn)
 
     # Pre-populate the Non-Project sentinel so every allocation line can
@@ -99,6 +108,16 @@ def load_tsv(tsv_path: str | Path, db_path: str | Path) -> None:
                     (raw_name, group_id),
                 )
                 current_employee_id = cur.lastrowid
+
+                # Restore date range if this employee had one before the reload
+                if raw_name in saved_dates:
+                    sy, sm, ey, em = saved_dates[raw_name]
+                    if any(v is not None for v in (sy, sm, ey, em)):
+                        conn.execute(
+                            "UPDATE employees SET start_year=?, start_month=?,"
+                            " end_year=?, end_month=? WHERE id=?",
+                            (sy, sm, ey, em, current_employee_id),
+                        )
 
             if current_employee_id is None:
                 raise ValueError(
@@ -164,6 +183,64 @@ def load_tsv(tsv_path: str | Path, db_path: str | Path) -> None:
                     "INSERT INTO efforts (allocation_line_id, year, month, percentage) VALUES (?, ?, ?, ?)",
                     (line_id, year, month, pct),
                 )
+
+    # Validate that restored employee date ranges don't conflict with loaded effort
+    _month_abbr = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    def _fmt(year, month):
+        return f"{_month_abbr[month]} {year}"
+
+    dated_employees = conn.execute("""
+        SELECT id, name, start_year, start_month, end_year, end_month
+        FROM employees
+        WHERE start_year IS NOT NULL OR end_year IS NOT NULL
+    """).fetchall()
+
+    # Batch-fetch effort months for all dated employees to avoid N+1 queries
+    effort_months_by_emp = {}
+    if dated_employees:
+        emp_ids = [emp["id"] for emp in dated_employees]
+        placeholders = ", ".join("?" for _ in emp_ids)
+        effort_rows = conn.execute(f"""
+            SELECT DISTINCT al.employee_id, e.year, e.month
+            FROM efforts e
+            JOIN allocation_lines al ON al.id = e.allocation_line_id
+            WHERE al.employee_id IN ({placeholders})
+            ORDER BY al.employee_id, e.year, e.month
+        """, emp_ids).fetchall()
+        for row in effort_rows:
+            effort_months_by_emp.setdefault(row["employee_id"], []).append(row)
+
+    try:
+        for emp in dated_employees:
+            sy, sm = emp["start_year"], emp["start_month"]
+            ey, em = emp["end_year"], emp["end_month"]
+            effort_months = effort_months_by_emp.get(emp["id"], [])
+
+            if sy is not None and sm is not None:
+                start_ym = sy * 12 + sm
+                early = [_fmt(r["year"], r["month"]) for r in effort_months
+                         if r["year"] * 12 + r["month"] < start_ym]
+                if early:
+                    raise ValueError(
+                        f"Effort exists before employee start ({_fmt(sy, sm)}): "
+                        + ", ".join(early)
+                    )
+
+            if ey is not None and em is not None:
+                end_ym = ey * 12 + em
+                late = [_fmt(r["year"], r["month"]) for r in effort_months
+                        if r["year"] * 12 + r["month"] > end_ym]
+                if late:
+                    raise ValueError(
+                        f"Effort exists after employee end ({_fmt(ey, em)}): "
+                        + ", ".join(late)
+                    )
+    except ValueError:
+        conn.rollback()
+        conn.close()
+        raise
 
     conn.execute(
         "INSERT INTO audit_log (timestamp, action, details) VALUES (?, ?, ?)",
