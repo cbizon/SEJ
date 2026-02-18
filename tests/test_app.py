@@ -2180,3 +2180,66 @@ def test_importer_raises_on_effort_outside_employee_end(tmp_path):
     # Reload should fail: August effort is after Jul 2025 end
     with pytest.raises(ValueError, match="after"):
         load_tsv(tsv, db)
+
+
+# --- Project change history tests ---
+
+def test_api_project_change_history_missing_param(main_client):
+    resp = main_client.get("/api/project-change-history")
+    assert resp.status_code == 400
+
+
+def test_api_project_change_history_no_merges(main_client):
+    """A project with no merges returns an empty list."""
+    resp = main_client.get("/api/project-change-history?project=5120001")
+    assert resp.status_code == 200
+    assert resp.json == []
+
+
+def test_api_project_change_history_with_merge(main_client, loaded_db):
+    """After a merge with changes, the change history endpoint returns them."""
+    # Create branch, make a change on project 5120001, merge
+    main_client.post("/api/branch/create")
+    payload = main_client.get("/api/data").json
+    # Find a line for project 5120001
+    line = next(r for r in payload["data"]
+                if r["Project Id"] == "5120001")
+    line_id = line["allocation_line_id"]
+
+    main_client.put("/api/effort", json={
+        "allocation_line_id": line_id, "year": 2025, "month": 7, "percentage": 42.0,
+    })
+    main_client.post("/api/branch/merge")
+
+    resp = main_client.get("/api/project-change-history?project=5120001")
+    assert resp.status_code == 200
+    groups = resp.json
+    assert len(groups) >= 1
+    group = groups[0]
+    assert "timestamp" in group
+    assert "branch_name" in group
+    assert len(group["changes"]) >= 1
+    change = group["changes"][0]
+    assert change["year"] == "2025"
+    assert change["month"] == "7"
+    assert "employee" in change
+    assert "type" in change
+
+
+def test_api_project_change_history_filters_by_project(main_client, loaded_db):
+    """Change history only returns changes for the requested project."""
+    # Create branch, change project 5120001, merge
+    main_client.post("/api/branch/create")
+    payload = main_client.get("/api/data").json
+    line = next(r for r in payload["data"]
+                if r["Project Id"] == "5120001")
+    main_client.put("/api/effort", json={
+        "allocation_line_id": line["allocation_line_id"],
+        "year": 2025, "month": 7, "percentage": 42.0,
+    })
+    main_client.post("/api/branch/merge")
+
+    # Project 5120002 should have no changes from this merge
+    resp = main_client.get("/api/project-change-history?project=5120002")
+    assert resp.status_code == 200
+    assert resp.json == []

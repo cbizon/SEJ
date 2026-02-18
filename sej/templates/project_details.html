@@ -53,6 +53,37 @@
             padding: 1rem;
             max-width: 900px;
         }
+        #history-section { display: none; margin-top: 1.5rem; }
+        .history-group {
+            background: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 0.75rem 1rem;
+            margin-bottom: 0.75rem;
+        }
+        .history-group-header {
+            font-weight: 600;
+            color: #495057;
+            margin-bottom: 0.5rem;
+            font-size: 0.9em;
+        }
+        .history-group table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85em;
+        }
+        .history-group th {
+            text-align: left;
+            padding: 3px 8px;
+            border-bottom: 1px solid #dee2e6;
+            color: #6c757d;
+            font-weight: 600;
+        }
+        .history-group td {
+            padding: 3px 8px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .history-group .arrow { color: #6c757d; }
     </style>
 </head>
 <body>
@@ -100,6 +131,11 @@
         <div id="spending-chart-wrap">
             <canvas id="spending-chart"></canvas>
         </div>
+    </div>
+
+    <div id="history-section">
+        <h2>Change History</h2>
+        <div id="history-content"></div>
     </div>
 
     <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
@@ -183,6 +219,70 @@
                 dl.appendChild(dd);
             });
             panel.style.display = "block";
+        }
+
+        const MONTH_NAMES = [
+            "", "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December",
+        ];
+
+        function showChangeHistory(groups) {
+            const section = document.getElementById("history-section");
+            const content = document.getElementById("history-content");
+            content.innerHTML = "";
+            if (!groups || groups.length === 0) {
+                section.style.display = "none";
+                return;
+            }
+            section.style.display = "block";
+            groups.forEach(g => {
+                const div = document.createElement("div");
+                div.className = "history-group";
+                const ts = new Date(g.timestamp).toLocaleString();
+                const header = document.createElement("div");
+                header.className = "history-group-header";
+                header.textContent = ts + (g.branch_name ? " — " + g.branch_name : "");
+                div.appendChild(header);
+
+                const table = document.createElement("table");
+                table.innerHTML = "<thead><tr><th>Type</th><th>Employee</th><th>Month</th><th>Old</th><th></th><th>New</th></tr></thead>";
+                const tbody = document.createElement("tbody");
+                g.changes.forEach(c => {
+                    const tr = document.createElement("tr");
+
+                    let monthLabel = "";
+                    if (c.month && c.year) {
+                        const monthNum = Number.parseInt(c.month, 10);
+                        if (Number.isFinite(monthNum) && monthNum >= 1 && monthNum <= 12) {
+                            monthLabel = MONTH_NAMES[monthNum] + " " + c.year;
+                        }
+                    }
+
+                    const oldNum = parseFloat(c.old_value);
+                    const oldVal = (c.old_value !== null && c.old_value !== "" && Number.isFinite(oldNum)) ? oldNum.toFixed(2) + "%" : "";
+                    const newNum = parseFloat(c.new_value);
+                    const newVal = (c.new_value !== null && c.new_value !== "" && Number.isFinite(newNum)) ? newNum.toFixed(2) + "%" : "";
+
+                    const typeTd = document.createElement("td");
+                    typeTd.textContent = c.type || "";
+                    const employeeTd = document.createElement("td");
+                    employeeTd.textContent = c.employee || "";
+                    const monthTd = document.createElement("td");
+                    monthTd.textContent = monthLabel;
+                    const oldTd = document.createElement("td");
+                    oldTd.textContent = oldVal;
+                    const arrowTd = document.createElement("td");
+                    arrowTd.className = "arrow";
+                    arrowTd.textContent = "\u2192";
+                    const newTd = document.createElement("td");
+                    newTd.textContent = newVal;
+                    tr.append(typeTd, employeeTd, monthTd, oldTd, arrowTd, newTd);
+                    tbody.appendChild(tr);
+                });
+                table.appendChild(tbody);
+                div.appendChild(table);
+                content.appendChild(div);
+            });
         }
 
         function showSpendingChart(data) {
@@ -277,7 +377,7 @@
 
         function loadProject(project) {
             document.getElementById("error").style.display = "none";
-            if (!project) { showProjectInfo(null); showSpendingChart(null); return; }
+            if (!project) { showProjectInfo(null); showSpendingChart(null); showChangeHistory(null); return; }
 
             fetch(`/api/project-details?project=${encodeURIComponent(project)}`)
                 .then(r => {
@@ -294,6 +394,14 @@
                         peopleTable.setData(people);
                     }
                 })
+                .catch(err => showError(err.message));
+
+            fetch(`/api/project-change-history?project=${encodeURIComponent(project)}`)
+                .then(r => {
+                    if (!r.ok) return r.text().then(t => { throw new Error(`Server error ${r.status}: ${t}`); });
+                    return r.json();
+                })
+                .then(groups => showChangeHistory(groups))
                 .catch(err => showError(err.message));
         }
 
