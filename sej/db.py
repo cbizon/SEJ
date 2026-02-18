@@ -26,9 +26,16 @@ def create_schema(conn: sqlite3.Connection) -> None:
         );
 
         CREATE TABLE IF NOT EXISTS projects (
-            id           INTEGER PRIMARY KEY,
-            project_code TEXT    UNIQUE NOT NULL,
-            name         TEXT
+            id               INTEGER PRIMARY KEY,
+            project_code     TEXT    UNIQUE NOT NULL,
+            name             TEXT,
+            start_year       INTEGER,
+            start_month      INTEGER CHECK (start_month BETWEEN 1 AND 12),
+            end_year         INTEGER,
+            end_month        INTEGER CHECK (end_month BETWEEN 1 AND 12),
+            local_pi_id      INTEGER REFERENCES employees(id),
+            personnel_budget REAL,
+            admin_group_id   INTEGER REFERENCES groups(id)
         );
 
         CREATE TABLE IF NOT EXISTS allocation_lines (
@@ -70,5 +77,24 @@ def create_schema(conn: sqlite3.Connection) -> None:
     existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(groups)").fetchall()}
     if "is_internal" not in existing_cols:
         conn.execute("ALTER TABLE groups ADD COLUMN is_internal INTEGER NOT NULL DEFAULT 1")
+
+    # Migration: add new project detail columns if they don't exist (for older DBs)
+    project_cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}
+    # Rename pi_id -> local_pi_id if the old column name exists
+    if "pi_id" in project_cols and "local_pi_id" not in project_cols:
+        conn.execute("ALTER TABLE projects RENAME COLUMN pi_id TO local_pi_id")
+        project_cols.discard("pi_id")
+        project_cols.add("local_pi_id")
+    for col, definition in [
+        ("start_year", "INTEGER"),
+        ("start_month", "INTEGER"),
+        ("end_year", "INTEGER"),
+        ("end_month", "INTEGER"),
+        ("local_pi_id", "INTEGER REFERENCES employees(id)"),
+        ("personnel_budget", "REAL"),
+        ("admin_group_id", "INTEGER REFERENCES groups(id)"),
+    ]:
+        if col not in project_cols:
+            conn.execute(f"ALTER TABLE projects ADD COLUMN {col} {definition}")
 
     conn.commit()

@@ -17,6 +17,7 @@ from sej.queries import (
     add_employee,
     add_group,
     add_project,
+    update_project,
     fix_totals,
     get_audit_log,
     get_nonproject_by_group,
@@ -196,8 +197,54 @@ def create_app(db_path=None):
         if "name" not in body or not body["name"].strip():
             return jsonify({"error": "Missing required field: name"}), 400
 
-        project_code = add_project(db, body["name"].strip())
+        try:
+            project_code = add_project(
+                db,
+                body["name"].strip(),
+                start_year=body.get("start_year"),
+                start_month=body.get("start_month"),
+                end_year=body.get("end_year"),
+                end_month=body.get("end_month"),
+                local_pi_id=body.get("local_pi_id"),
+                personnel_budget=body.get("personnel_budget"),
+                admin_group_id=body.get("admin_group_id"),
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
         return jsonify({"project_code": project_code})
+
+    @app.route("/api/project", methods=["PUT"])
+    def api_update_project():
+        db = _resolve_db(app)
+        info = get_branch_info(db)
+        if info.get("db_role") != "branch":
+            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "Request body must be JSON"}), 400
+        if "project_code" not in body:
+            return jsonify({"error": "Missing required field: project_code"}), 400
+
+        name = body.get("name")
+        if name is not None:
+            name = name.strip() or None
+        try:
+            update_project(
+                db,
+                body["project_code"],
+                name=name,
+                start_year=body.get("start_year"),
+                start_month=body.get("start_month"),
+                end_year=body.get("end_year"),
+                end_month=body.get("end_month"),
+                local_pi_id=body.get("local_pi_id"),
+                personnel_budget=body.get("personnel_budget"),
+                admin_group_id=body.get("admin_group_id"),
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"ok": True})
 
     @app.route("/api/fix-totals", methods=["POST"])
     def api_fix_totals():

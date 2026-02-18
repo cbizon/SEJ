@@ -190,12 +190,12 @@ def get_spreadsheet_rows_with_ids(db_path: str | Path) -> tuple[list[str], list[
 
 
 def get_groups(db_path: str | Path) -> list[dict]:
-    """Return sorted list of groups with name and is_internal flag."""
+    """Return sorted list of groups with id, name and is_internal flag."""
     conn = get_connection(db_path)
     create_schema(conn)
-    rows = conn.execute("SELECT name, is_internal FROM groups ORDER BY name").fetchall()
+    rows = conn.execute("SELECT id, name, is_internal FROM groups ORDER BY name").fetchall()
     conn.close()
-    return [{"name": r["name"], "is_internal": bool(r["is_internal"])} for r in rows]
+    return [{"id": r["id"], "name": r["name"], "is_internal": bool(r["is_internal"])} for r in rows]
 
 
 def get_group_details(db_path: str | Path, group_name: str) -> dict:
@@ -311,28 +311,58 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
 
 
 def get_employees(db_path: str | Path) -> list[dict]:
-    """Return list of employees with their id, name, and group."""
+    """Return list of employees with their id, name, group, and is_internal flag."""
     conn = get_connection(db_path)
     rows = conn.execute("""
-        SELECT e.id, e.name, g.name AS group_name
+        SELECT e.id, e.name, g.name AS group_name, g.is_internal
         FROM employees e
         JOIN groups g ON g.id = e.group_id
         ORDER BY e.name
     """).fetchall()
     conn.close()
-    return [{"id": r["id"], "name": r["name"], "group": r["group_name"]} for r in rows]
+    return [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "group": r["group_name"],
+            "is_internal": bool(r["is_internal"]),
+        }
+        for r in rows
+    ]
 
 
 def get_projects(db_path: str | Path) -> list[dict]:
-    """Return list of projects with their id, code, and name."""
+    """Return list of projects with their id, code, name, and detail fields."""
     conn = get_connection(db_path)
     rows = conn.execute("""
-        SELECT id, project_code, name
-        FROM projects
-        ORDER BY project_code
+        SELECT p.id, p.project_code, p.name,
+               p.start_year, p.start_month, p.end_year, p.end_month,
+               p.local_pi_id, e.name AS local_pi_name,
+               p.personnel_budget,
+               p.admin_group_id, g.name AS admin_group_name
+        FROM projects p
+        LEFT JOIN employees e ON e.id = p.local_pi_id
+        LEFT JOIN groups g ON g.id = p.admin_group_id
+        ORDER BY p.project_code
     """).fetchall()
     conn.close()
-    return [{"id": r["id"], "project_code": r["project_code"], "name": r["name"]} for r in rows]
+    return [
+        {
+            "id": r["id"],
+            "project_code": r["project_code"],
+            "name": r["name"],
+            "start_year": r["start_year"],
+            "start_month": r["start_month"],
+            "end_year": r["end_year"],
+            "end_month": r["end_month"],
+            "local_pi_id": r["local_pi_id"],
+            "local_pi_name": r["local_pi_name"],
+            "personnel_budget": r["personnel_budget"],
+            "admin_group_id": r["admin_group_id"],
+            "admin_group_name": r["admin_group_name"],
+        }
+        for r in rows
+    ]
 
 
 def get_branch_info(db_path: str | Path) -> dict:
@@ -575,13 +605,89 @@ def add_group(db_path: str | Path, name: str, is_internal: bool) -> int:
     return group_id
 
 
-def add_project(db_path: str | Path, name: str) -> str:
+_MONTH_ABBR = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def _validate_local_pi(conn: sqlite3.Connection, local_pi_id: int) -> None:
+    """Raise ValueError if the employee is not internal."""
+    row = conn.execute(
+        "SELECT g.is_internal FROM employees e JOIN groups g ON g.id = e.group_id WHERE e.id = ?",
+        (local_pi_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Employee not found: {local_pi_id}")
+    if not row["is_internal"]:
+        raise ValueError(f"Local PI must be an internal employee (id={local_pi_id})")
+
+
+def _validate_project_dates(
+    conn: sqlite3.Connection,
+    project_id: int,
+    start_year: int | None,
+    start_month: int | None,
+    end_year: int | None,
+    end_month: int | None,
+) -> None:
+    """Raise ValueError if any effort for the project falls outside the date bounds.
+
+    Only checks a bound when both the year and month for that bound are provided.
+    """
+    rows = conn.execute("""
+        SELECT DISTINCT e.year, e.month
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        WHERE al.project_id = ?
+        ORDER BY e.year, e.month
+    """, (project_id,)).fetchall()
+
+    if not rows:
+        return
+
+    def fmt(year: int, month: int) -> str:
+        return f"{_MONTH_ABBR[month]} {year}"
+
+    if start_year is not None and start_month is not None:
+        start_ym = start_year * 12 + start_month
+        early = [fmt(r["year"], r["month"]) for r in rows
+                 if r["year"] * 12 + r["month"] < start_ym]
+        if early:
+            raise ValueError(
+                f"Effort exists before project start ({fmt(start_year, start_month)}): "
+                + ", ".join(early)
+            )
+
+    if end_year is not None and end_month is not None:
+        end_ym = end_year * 12 + end_month
+        late = [fmt(r["year"], r["month"]) for r in rows
+                if r["year"] * 12 + r["month"] > end_ym]
+        if late:
+            raise ValueError(
+                f"Effort exists after project end ({fmt(end_year, end_month)}): "
+                + ", ".join(late)
+            )
+
+
+def add_project(
+    db_path: str | Path,
+    name: str,
+    start_year: int | None = None,
+    start_month: int | None = None,
+    end_year: int | None = None,
+    end_month: int | None = None,
+    local_pi_id: int | None = None,
+    personnel_budget: float | None = None,
+    admin_group_id: int | None = None,
+) -> str:
     """Add a new project with an auto-generated project code.
 
     Finds the maximum numeric project code and increments by 1.
     Returns the new project_code.
+    Raises ValueError if local_pi_id refers to an external employee.
     """
     conn = get_connection(db_path)
+    if local_pi_id is not None:
+        _validate_local_pi(conn, local_pi_id)
     row = conn.execute("""
         SELECT MAX(CAST(project_code AS INTEGER)) AS max_code
         FROM projects
@@ -590,12 +696,57 @@ def add_project(db_path: str | Path, name: str) -> str:
     max_code = row["max_code"] if row["max_code"] is not None else 0
     new_code = str(max_code + 1)
     conn.execute(
-        "INSERT INTO projects (project_code, name) VALUES (?, ?)",
-        (new_code, name),
+        """INSERT INTO projects
+           (project_code, name, start_year, start_month, end_year, end_month,
+            local_pi_id, personnel_budget, admin_group_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (new_code, name, start_year, start_month, end_year, end_month,
+         local_pi_id, personnel_budget, admin_group_id),
     )
     conn.commit()
     conn.close()
     return new_code
+
+
+def update_project(
+    db_path: str | Path,
+    project_code: str,
+    name: str | None = None,
+    start_year: int | None = None,
+    start_month: int | None = None,
+    end_year: int | None = None,
+    end_month: int | None = None,
+    local_pi_id: int | None = None,
+    personnel_budget: float | None = None,
+    admin_group_id: int | None = None,
+) -> None:
+    """Update detail fields on an existing project.
+
+    Only fields that are explicitly passed (including None to clear) are updated.
+    Raises ValueError if the project_code does not exist, or if local_pi_id
+    refers to an external employee.
+    """
+    conn = get_connection(db_path)
+    existing = conn.execute(
+        "SELECT id FROM projects WHERE project_code = ?", (project_code,)
+    ).fetchone()
+    if existing is None:
+        conn.close()
+        raise ValueError(f"Project not found: {project_code}")
+    if local_pi_id is not None:
+        _validate_local_pi(conn, local_pi_id)
+    _validate_project_dates(conn, existing["id"], start_year, start_month, end_year, end_month)
+    conn.execute(
+        """UPDATE projects
+           SET name = ?, start_year = ?, start_month = ?,
+               end_year = ?, end_month = ?, local_pi_id = ?,
+               personnel_budget = ?, admin_group_id = ?
+           WHERE project_code = ?""",
+        (name, start_year, start_month, end_year, end_month,
+         local_pi_id, personnel_budget, admin_group_id, project_code),
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_nonproject_by_group(db_path: str | Path) -> dict:
@@ -774,13 +925,41 @@ def get_project_details(db_path: str | Path, project_code: str) -> dict:
     """Return total FTE and per-person effort for a project by month.
 
     Returns a dict with:
-        months:  list of month label strings in chronological order
-        fte:     {label: "Total FTE", <month>: fte_value, ...}
-        people:  list of {name, group, <month>: effort_pct, ...} sorted by name
+        months:       list of month label strings in chronological order
+        fte_rows:     [{label, <month>: fte_value, ...}, ...]
+        people:       list of {name, group, <month>: effort_pct, ...} sorted by name
+        project_info: dict with name, start, end, local_pi_name, personnel_budget,
+                      admin_group_name (all optional fields are None when not set)
     """
     conn = get_connection(db_path)
     create_schema(conn)
     months = _discover_months(conn)
+
+    proj_row = conn.execute("""
+        SELECT p.name, p.start_year, p.start_month, p.end_year, p.end_month,
+               e.name AS local_pi_name, p.personnel_budget,
+               g.name AS admin_group_name
+        FROM projects p
+        LEFT JOIN employees e ON e.id = p.local_pi_id
+        LEFT JOIN groups g ON g.id = p.admin_group_id
+        WHERE p.project_code = ?
+    """, (project_code,)).fetchone()
+
+    def _period(year, month):
+        if year is not None and month is not None:
+            return _month_label(year, month)
+        return None
+
+    project_info = None
+    if proj_row is not None:
+        project_info = {
+            "name": proj_row["name"],
+            "start": _period(proj_row["start_year"], proj_row["start_month"]),
+            "end": _period(proj_row["end_year"], proj_row["end_month"]),
+            "local_pi_name": proj_row["local_pi_name"],
+            "personnel_budget": proj_row["personnel_budget"],
+            "admin_group_name": proj_row["admin_group_name"],
+        }
 
     internal_fte_rows = conn.execute("""
         SELECT e.year, e.month, SUM(e.percentage) / 100.0 AS total_fte
@@ -860,7 +1039,12 @@ def get_project_details(db_path: str | Path, project_code: str) -> dict:
             row[label] = round(person_data[name].get(label, 0.0), 1)
         people_result.append(row)
 
-    return {"months": month_labels, "fte_rows": fte_result, "people": people_result}
+    return {
+        "months": month_labels,
+        "fte_rows": fte_result,
+        "people": people_result,
+        "project_info": project_info,
+    }
 
 
 def get_audit_log(db_path: str | Path) -> list[dict]:

@@ -143,7 +143,7 @@
         <button id="fix-totals-btn" style="display:none">Fix totals</button>
         <button id="add-employee-btn" style="display:none">Add employee</button>
         <button id="add-row-btn" style="display:none">Add allocation line</button>
-        <button id="add-project-btn" style="display:none">Add project</button>
+        <button id="add-project-btn" style="display:none">Add/Edit project</button>
         <button id="add-group-btn" style="display:none">Add group</button>
         <button id="save-btn" style="display:none">Save changes</button>
         <button id="discard-btn" style="display:none">Discard changes</button>
@@ -193,9 +193,49 @@
 
     <div id="add-project-overlay">
         <div id="add-row-form">
-            <h3 style="margin-top:0">Add Project</h3>
+            <h3 id="ap-title" style="margin-top:0">Add Project</h3>
+            <label>Edit existing project <span style="font-weight:normal;font-size:0.9em">(or leave on "New" to add)</span></label>
+            <select id="ap-select">
+                <option value="">— New project —</option>
+            </select>
             <label>Project Name</label>
             <input id="ap-name" placeholder="Enter project name">
+            <label>Start <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
+            <div style="display:flex;gap:8px">
+                <select id="ap-start-month" style="flex:1">
+                    <option value="">Month</option>
+                    <option value="1">Jan</option><option value="2">Feb</option>
+                    <option value="3">Mar</option><option value="4">Apr</option>
+                    <option value="5">May</option><option value="6">Jun</option>
+                    <option value="7">Jul</option><option value="8">Aug</option>
+                    <option value="9">Sep</option><option value="10">Oct</option>
+                    <option value="11">Nov</option><option value="12">Dec</option>
+                </select>
+                <input id="ap-start-year" type="number" placeholder="Year" style="width:80px">
+            </div>
+            <label>End <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
+            <div style="display:flex;gap:8px">
+                <select id="ap-end-month" style="flex:1">
+                    <option value="">Month</option>
+                    <option value="1">Jan</option><option value="2">Feb</option>
+                    <option value="3">Mar</option><option value="4">Apr</option>
+                    <option value="5">May</option><option value="6">Jun</option>
+                    <option value="7">Jul</option><option value="8">Aug</option>
+                    <option value="9">Sep</option><option value="10">Oct</option>
+                    <option value="11">Nov</option><option value="12">Dec</option>
+                </select>
+                <input id="ap-end-year" type="number" placeholder="Year" style="width:80px">
+            </div>
+            <label>Local PI <span style="font-weight:normal;font-size:0.9em">(optional, internal employees only)</span></label>
+            <select id="ap-pi">
+                <option value="">— None —</option>
+            </select>
+            <label>Administrative Group <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
+            <select id="ap-admin-group">
+                <option value="">— None —</option>
+            </select>
+            <label>Personnel Budget <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
+            <input id="ap-budget" type="number" placeholder="e.g. 500000" step="any" min="0">
             <div class="btn-row">
                 <button id="ap-cancel">Cancel</button>
                 <button id="ap-submit">Add</button>
@@ -774,10 +814,95 @@
                     });
                 });
 
-                // Add project
+                // Add/Edit project
+                let apProjectsData = [];
+
+                function apSetMode(isEdit) {
+                    document.getElementById("ap-title").textContent = isEdit ? "Edit Project" : "Add Project";
+                    document.getElementById("ap-submit").textContent = isEdit ? "Update" : "Add";
+                }
+
+                function apPopulateFromProject(proj) {
+                    document.getElementById("ap-name").value = proj.name || "";
+                    document.getElementById("ap-start-month").value = proj.start_month || "";
+                    document.getElementById("ap-start-year").value = proj.start_year || "";
+                    document.getElementById("ap-end-month").value = proj.end_month || "";
+                    document.getElementById("ap-end-year").value = proj.end_year || "";
+                    document.getElementById("ap-pi").value = proj.local_pi_id || "";
+                    document.getElementById("ap-budget").value = proj.personnel_budget != null ? proj.personnel_budget : "";
+                    document.getElementById("ap-admin-group").value = proj.admin_group_id || "";
+                }
+
+                document.getElementById("ap-select").addEventListener("change", () => {
+                    const code = document.getElementById("ap-select").value;
+                    if (code) {
+                        const proj = apProjectsData.find(p => p.project_code === code);
+                        if (proj) apPopulateFromProject(proj);
+                        apSetMode(true);
+                    } else {
+                        document.getElementById("ap-name").value = "";
+                        document.getElementById("ap-start-month").value = "";
+                        document.getElementById("ap-start-year").value = "";
+                        document.getElementById("ap-end-month").value = "";
+                        document.getElementById("ap-end-year").value = "";
+                        document.getElementById("ap-pi").value = "";
+                        document.getElementById("ap-budget").value = "";
+                        apSetMode(false);
+                    }
+                });
+
                 document.getElementById("add-project-btn").addEventListener("click", () => {
+                    // Reset form
                     document.getElementById("ap-name").value = "";
-                    document.getElementById("add-project-overlay").classList.add("open");
+                    document.getElementById("ap-start-month").value = "";
+                    document.getElementById("ap-start-year").value = "";
+                    document.getElementById("ap-end-month").value = "";
+                    document.getElementById("ap-end-year").value = "";
+                    document.getElementById("ap-budget").value = "";
+                    apSetMode(false);
+
+                    Promise.all([
+                        fetch("/api/projects").then(r => r.json()),
+                        fetch("/api/employees").then(r => r.json()),
+                        fetch("/api/groups").then(r => r.json()),
+                    ]).then(([projects, employees, groups]) => {
+                        apProjectsData = projects;
+
+                        // Populate project selector
+                        const sel = document.getElementById("ap-select");
+                        sel.innerHTML = '<option value="">— New project —</option>';
+                        projects.forEach(p => {
+                            const opt = document.createElement("option");
+                            opt.value = p.project_code;
+                            opt.textContent = p.project_code + (p.name ? " — " + p.name : "");
+                            sel.appendChild(opt);
+                        });
+                        sel.value = "";
+
+                        // Populate Local PI selector — internal employees only
+                        const piSel = document.getElementById("ap-pi");
+                        piSel.innerHTML = '<option value="">— None —</option>';
+                        employees.filter(e => e.is_internal).forEach(e => {
+                            const opt = document.createElement("option");
+                            opt.value = e.id;
+                            opt.textContent = e.name;
+                            piSel.appendChild(opt);
+                        });
+                        piSel.value = "";
+
+                        // Populate admin group selector — all groups
+                        const agSel = document.getElementById("ap-admin-group");
+                        agSel.innerHTML = '<option value="">— None —</option>';
+                        groups.forEach(g => {
+                            const opt = document.createElement("option");
+                            opt.value = g.id;
+                            opt.textContent = g.name + (g.is_internal ? "" : " (external)");
+                            agSel.appendChild(opt);
+                        });
+                        agSel.value = "";
+
+                        document.getElementById("add-project-overlay").classList.add("open");
+                    });
                 });
 
                 document.getElementById("ap-cancel").addEventListener("click", () => {
@@ -785,20 +910,47 @@
                 });
 
                 document.getElementById("ap-submit").addEventListener("click", () => {
+                    const selectedCode = document.getElementById("ap-select").value;
                     const name = document.getElementById("ap-name").value.trim();
-                    if (!name) {
-                        alert("Project name is required.");
+                    const startMonth = document.getElementById("ap-start-month").value;
+                    const startYear = document.getElementById("ap-start-year").value;
+                    const endMonth = document.getElementById("ap-end-month").value;
+                    const endYear = document.getElementById("ap-end-year").value;
+                    const piId = document.getElementById("ap-pi").value;
+                    const budget = document.getElementById("ap-budget").value;
+                    const adminGroupId = document.getElementById("ap-admin-group").value;
+
+                    if (!selectedCode && !name) {
+                        alert("Project name is required for a new project.");
                         return;
                     }
+
+                    const payload = {
+                        name: name || undefined,
+                        start_month: startMonth ? parseInt(startMonth) : null,
+                        start_year: startYear ? parseInt(startYear) : null,
+                        end_month: endMonth ? parseInt(endMonth) : null,
+                        end_year: endYear ? parseInt(endYear) : null,
+                        local_pi_id: piId ? parseInt(piId) : null,
+                        personnel_budget: budget !== "" ? parseFloat(budget) : null,
+                        admin_group_id: adminGroupId ? parseInt(adminGroupId) : null,
+                    };
+
+                    const isEdit = !!selectedCode;
+                    if (isEdit) payload.project_code = selectedCode;
+
                     fetch("/api/project", {
-                        method: "POST",
+                        method: isEdit ? "PUT" : "POST",
                         headers: {"Content-Type": "application/json"},
-                        body: JSON.stringify({ name }),
+                        body: JSON.stringify(payload),
                     })
-                    .then(r => r.json())
+                    .then(r => {
+                        if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
+                        return r.json();
+                    })
                     .then(result => {
                         document.getElementById("add-project-overlay").classList.remove("open");
-                        alert(`Project created with code: ${result.project_code}`);
+                        if (!isEdit) alert(`Project created with code: ${result.project_code}`);
                     });
                 });
 
