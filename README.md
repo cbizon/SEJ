@@ -48,15 +48,48 @@ uv run sej-web path/to/custom.db
 
 Then open http://127.0.0.1:5000 in your browser.
 
+### Effort Table
+
+The main page shows a spreadsheet-style table of effort allocations. The table supports filtering, sorting, and column show/hide. Rows for employees in **external groups** are excluded from the 100% totals check (see [Groups](#groups) below).
+
+An **Export TSV** button downloads the current table contents as a TSV file, respecting any active filters and visible columns.
+
+### Edit Mode (Branch)
+
 When viewing a **branch** database, the app enters edit mode:
 
 - A banner shows the active branch name
 - Month cells become editable (click to type a new percentage)
 - **Selection mode** lets you select multiple cells and apply a single value to all of them
 - **Add allocation line** lets you create a new row for an employee/project combination
+- **Add employee** opens a dialog to create a new employee with name, group, and salary
+- **Add/Edit project** opens a dialog to create a new project or update an existing project's metadata (name, start/end dates, local PI, admin group, personnel budget)
+- **Fix totals** automatically adjusts effort percentages so that each internal employee's monthly allocations sum to 100%
 - Branch controls (create, merge, discard) are available directly in the UI
 
 Edits on main are rejected — you must be on a branch to make changes.
+
+## Groups
+
+Groups can be flagged as **internal** or **external**. Internal groups are subject to the 100% monthly effort constraint; external groups are not. New groups can be added from the Add employee dialog on a branch.
+
+## Employees
+
+Each employee record stores:
+
+- **Salary** — used to estimate personnel spending against project budgets
+- **Start date / End date** — optional month-level date range; FTE calculations only count an employee during their active period
+
+Employee salary and dates can be updated from the Add/Edit project dialog area or via the employee API on a branch.
+
+## Projects
+
+Each project record stores optional metadata:
+
+- **Start / End** — the project's active date range (month and year)
+- **Local PI** — the primary investigator from within the organization
+- **Admin Group** — the group responsible for administering the project
+- **Personnel Budget** — total personnel spending budget (dollars); used to compute a remaining-budget chart in the Project Details report
 
 ## Reports
 
@@ -67,7 +100,17 @@ The web app includes several built-in reports, accessible from the **Reports** p
 | Non-Project by Group | Average non-project effort percentage per group, by month, with a breakdown table below |
 | Non-Project by Person | Per-person non-project effort percentages, by month |
 | Group Details | For a selected group, shows each employee's effort across all projects by month |
-| Project Details | For a selected project, shows each employee's effort by month, plus average % allocation across the team |
+| Project Details | For a selected project, shows project metadata, effort tables, a budget chart, and change history |
+
+### Project Details
+
+The Project Details report includes:
+
+- **Project info panel** — shows local PI, admin group, date range, and personnel budget (when set)
+- **Total FTE by Month** — total full-time equivalents allocated to the project each month
+- **Individual Effort by Month** — per-person percentage allocations, filterable by name and group
+- **Remaining Personnel Budget** — a line chart tracking how much of the personnel budget remains month by month (only shown when a budget is set)
+- **Change History** — all allocation changes from past merges, grouped by merge event
 
 ## History
 

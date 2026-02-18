@@ -28,6 +28,10 @@ The database is SQLite. See `docs/schema.md` for the full schema.
 
 The project code `"Non-Project"` is a sentinel value in the `projects` table representing overhead or administrative effort (rows where the source data has no project ID). All code that works with projects must handle this case.
 
+Groups can be internal or external (`is_internal` flag). The 100% monthly effort constraint only applies to internal groups. Any code computing or validating effort totals must skip external groups.
+
+Employees have optional start/end month ranges. FTE and totals calculations must only count months within an employee's active period.
+
 ## Input
 
 The input data is a tsv file downloaded from a spreadsheet.  For development, we will always be using an anonymized version of the input file. CLAUDE may NOT read any non-anonymized input data.  Do not attempt to open an input file that does not contain "anon" as part of the file name.
