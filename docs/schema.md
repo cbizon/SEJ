@@ -35,6 +35,10 @@ People whose effort is being tracked. Each employee belongs to exactly one group
 | `name` | text | UNIQUE NOT NULL |
 | `group_id` | integer | FK → groups.id, NOT NULL |
 | `salary` | real | NOT NULL DEFAULT 120000 |
+| `start_year` | integer | optional — must be paired with `start_month` |
+| `start_month` | integer | optional, 1–12 — must be paired with `start_year` |
+| `end_year` | integer | optional — must be paired with `end_month` |
+| `end_month` | integer | optional, 1–12 — must be paired with `end_year` |
 
 ---
 

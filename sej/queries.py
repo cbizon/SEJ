@@ -311,10 +311,11 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
 
 
 def get_employees(db_path: str | Path) -> list[dict]:
-    """Return list of employees with their id, name, group, is_internal flag, and salary."""
+    """Return list of employees with their id, name, group, is_internal flag, salary, and dates."""
     conn = get_connection(db_path)
     rows = conn.execute("""
-        SELECT e.id, e.name, g.name AS group_name, g.is_internal, e.salary
+        SELECT e.id, e.name, g.name AS group_name, g.is_internal,
+               e.salary, e.start_year, e.start_month, e.end_year, e.end_month
         FROM employees e
         JOIN groups g ON g.id = e.group_id
         ORDER BY e.name
@@ -327,6 +328,10 @@ def get_employees(db_path: str | Path) -> list[dict]:
             "group": r["group_name"],
             "is_internal": bool(r["is_internal"]),
             "salary": r["salary"],
+            "start_year": r["start_year"],
+            "start_month": r["start_month"],
+            "end_year": r["end_year"],
+            "end_month": r["end_month"],
         }
         for r in rows
     ]
@@ -377,7 +382,11 @@ def get_branch_info(db_path: str | Path) -> dict:
 
 def update_effort(db_path: str | Path, allocation_line_id: int,
                   year: int, month: int, percentage: float | None) -> None:
-    """Insert or update an effort percentage. If percentage is None, delete the row."""
+    """Insert or update an effort percentage. If percentage is None, delete the row.
+
+    Raises ValueError if percentage is not None and the month falls outside the
+    employee's active date range (start_year/start_month or end_year/end_month).
+    """
     conn = get_connection(db_path)
     if percentage is None:
         conn.execute(
@@ -385,6 +394,27 @@ def update_effort(db_path: str | Path, allocation_line_id: int,
             (allocation_line_id, year, month),
         )
     else:
+        emp = conn.execute("""
+            SELECT emp.start_year, emp.start_month, emp.end_year, emp.end_month
+            FROM allocation_lines al
+            JOIN employees emp ON emp.id = al.employee_id
+            WHERE al.id = ?
+        """, (allocation_line_id,)).fetchone()
+        if emp is not None:
+            sy, sm = emp["start_year"], emp["start_month"]
+            ey, em = emp["end_year"], emp["end_month"]
+            if sy is not None and sm is not None and (year, month) < (sy, sm):
+                conn.close()
+                raise ValueError(
+                    f"Effort in {_MONTH_ABBR[month]} {year} is before employee start "
+                    f"({_MONTH_ABBR[sm]} {sy})"
+                )
+            if ey is not None and em is not None and (year, month) > (ey, em):
+                conn.close()
+                raise ValueError(
+                    f"Effort in {_MONTH_ABBR[month]} {year} is after employee end "
+                    f"({_MONTH_ABBR[em]} {ey})"
+                )
         conn.execute(
             """INSERT INTO efforts (allocation_line_id, year, month, percentage)
                VALUES (?, ?, ?, ?)
@@ -431,6 +461,16 @@ def fix_totals(db_path: str | Path) -> list[dict]:
         emp_id = row["employee_id"]
         np_lines_for_emp.setdefault(emp_id, []).append(row["line_id"])
 
+    # Fetch employee active date ranges once for all employees
+    emp_dates = {}
+    for row in conn.execute(
+        "SELECT id, start_year, start_month, end_year, end_month FROM employees"
+    ).fetchall():
+        emp_dates[row["id"]] = {
+            "start_year": row["start_year"], "start_month": row["start_month"],
+            "end_year": row["end_year"], "end_month": row["end_month"],
+        }
+
     changes = []
     for year, month in months:
         emp_totals = conn.execute("""
@@ -446,6 +486,15 @@ def fix_totals(db_path: str | Path) -> list[dict]:
 
         for row in emp_totals:
             emp_id = row["employee_id"]
+            dates = emp_dates.get(emp_id, {})
+            sy = dates.get("start_year")
+            sm = dates.get("start_month")
+            ey = dates.get("end_year")
+            em = dates.get("end_month")
+            if sy is not None and sm is not None and (year, month) < (sy, sm):
+                continue
+            if ey is not None and em is not None and (year, month) > (ey, em):
+                continue
             total = row["total"]
 
             if abs(total - 100) <= 0.01:
@@ -693,6 +742,119 @@ def _validate_project_fields(
             raise ValueError(f"{label} must be between 1 and 12")
     if personnel_budget is not None and personnel_budget < 0:
         raise ValueError("personnel_budget must not be negative")
+
+
+def _validate_employee_fields(
+    start_year: int | None,
+    start_month: int | None,
+    end_year: int | None,
+    end_month: int | None,
+) -> None:
+    """Validate shared constraints for update_employee.
+
+    Raises ValueError if:
+    - year and month are not both set or both None for a date bound
+    - a month value is outside 1-12
+    """
+    if (start_year is None) != (start_month is None):
+        raise ValueError("start_year and start_month must both be set or both be empty")
+    if (end_year is None) != (end_month is None):
+        raise ValueError("end_year and end_month must both be set or both be empty")
+    for label, val in [("start_month", start_month), ("end_month", end_month)]:
+        if val is not None and not (1 <= val <= 12):
+            raise ValueError(f"{label} must be between 1 and 12")
+
+
+def _validate_employee_dates(
+    conn: sqlite3.Connection,
+    employee_id: int,
+    start_year: int | None,
+    start_month: int | None,
+    end_year: int | None,
+    end_month: int | None,
+) -> None:
+    """Raise ValueError if any effort for the employee falls outside the date bounds.
+
+    Only checks a bound when both the year and month for that bound are provided.
+    """
+    rows = conn.execute("""
+        SELECT DISTINCT e.year, e.month
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        WHERE al.employee_id = ?
+        ORDER BY e.year, e.month
+    """, (employee_id,)).fetchall()
+
+    if not rows:
+        return
+
+    def fmt(year: int, month: int) -> str:
+        return f"{_MONTH_ABBR[month]} {year}"
+
+    if start_year is not None and start_month is not None:
+        start_ym = start_year * 12 + start_month
+        early = [fmt(r["year"], r["month"]) for r in rows
+                 if r["year"] * 12 + r["month"] < start_ym]
+        if early:
+            raise ValueError(
+                f"Effort exists before employee start ({fmt(start_year, start_month)}): "
+                + ", ".join(early)
+            )
+
+    if end_year is not None and end_month is not None:
+        end_ym = end_year * 12 + end_month
+        late = [fmt(r["year"], r["month"]) for r in rows
+                if r["year"] * 12 + r["month"] > end_ym]
+        if late:
+            raise ValueError(
+                f"Effort exists after employee end ({fmt(end_year, end_month)}): "
+                + ", ".join(late)
+            )
+
+
+def update_employee(
+    db_path: str | Path,
+    employee_id: int,
+    salary: float | None = None,
+    start_year: int | None = None,
+    start_month: int | None = None,
+    end_year: int | None = None,
+    end_month: int | None = None,
+) -> None:
+    """Update date range (and optionally salary) for an existing employee.
+
+    start_year/start_month and end_year/end_month are always written; pass None
+    to clear a bound.  salary is only updated if not None.
+
+    Raises ValueError if the employee is not found, date year/month are not
+    paired, months are out of range, or effort exists outside the given dates.
+    """
+    _validate_employee_fields(start_year, start_month, end_year, end_month)
+    conn = get_connection(db_path)
+    existing = conn.execute(
+        "SELECT id FROM employees WHERE id = ?", (employee_id,)
+    ).fetchone()
+    if existing is None:
+        conn.close()
+        raise ValueError(f"Employee not found: {employee_id}")
+    _validate_employee_dates(conn, employee_id, start_year, start_month, end_year, end_month)
+    if salary is not None:
+        conn.execute(
+            """UPDATE employees
+               SET start_year = ?, start_month = ?, end_year = ?, end_month = ?,
+                   salary = ?
+               WHERE id = ?""",
+            (start_year, start_month, end_year, end_month, salary, employee_id),
+        )
+    else:
+        conn.execute(
+            """UPDATE employees
+               SET start_year = ?, start_month = ?, end_year = ?, end_month = ?
+               WHERE id = ?""",
+            (start_year, start_month, end_year, end_month, employee_id),
+        )
+    conn.commit()
+    conn.close()
 
 
 def add_project(
@@ -1048,6 +1210,14 @@ def get_project_details(db_path: str | Path, project_code: str) -> dict:
         LEFT JOIN groups g ON g.id = p.admin_group_id
         WHERE p.project_code = ?
     """, (project_code,)).fetchone()
+
+    if proj_row is not None:
+        sy, sm = proj_row["start_year"], proj_row["start_month"]
+        ey, em = proj_row["end_year"], proj_row["end_month"]
+        if sy is not None and sm is not None:
+            months = [(y, m) for y, m in months if (y, m) >= (sy, sm)]
+        if ey is not None and em is not None:
+            months = [(y, m) for y, m in months if (y, m) <= (ey, em)]
 
     def _period(year, month):
         if year is not None and month is not None:
