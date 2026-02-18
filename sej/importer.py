@@ -188,45 +188,59 @@ def load_tsv(tsv_path: str | Path, db_path: str | Path) -> None:
     _month_abbr = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
+    def _fmt(year, month):
+        return f"{_month_abbr[month]} {year}"
+
     dated_employees = conn.execute("""
         SELECT id, name, start_year, start_month, end_year, end_month
         FROM employees
         WHERE start_year IS NOT NULL OR end_year IS NOT NULL
     """).fetchall()
 
-    for emp in dated_employees:
-        sy, sm = emp["start_year"], emp["start_month"]
-        ey, em = emp["end_year"], emp["end_month"]
-        effort_months = conn.execute("""
-            SELECT DISTINCT e.year, e.month
+    # Batch-fetch effort months for all dated employees to avoid N+1 queries
+    effort_months_by_emp = {}
+    if dated_employees:
+        emp_ids = [emp["id"] for emp in dated_employees]
+        placeholders = ", ".join("?" for _ in emp_ids)
+        effort_rows = conn.execute(f"""
+            SELECT DISTINCT al.employee_id, e.year, e.month
             FROM efforts e
             JOIN allocation_lines al ON al.id = e.allocation_line_id
-            WHERE al.employee_id = ?
-            ORDER BY e.year, e.month
-        """, (emp["id"],)).fetchall()
+            WHERE al.employee_id IN ({placeholders})
+            ORDER BY al.employee_id, e.year, e.month
+        """, emp_ids).fetchall()
+        for row in effort_rows:
+            effort_months_by_emp.setdefault(row["employee_id"], []).append(row)
 
-        def _fmt(year, month):
-            return f"{_month_abbr[month]} {year}"
+    try:
+        for emp in dated_employees:
+            sy, sm = emp["start_year"], emp["start_month"]
+            ey, em = emp["end_year"], emp["end_month"]
+            effort_months = effort_months_by_emp.get(emp["id"], [])
 
-        if sy is not None and sm is not None:
-            start_ym = sy * 12 + sm
-            early = [_fmt(r["year"], r["month"]) for r in effort_months
-                     if r["year"] * 12 + r["month"] < start_ym]
-            if early:
-                raise ValueError(
-                    f"Effort exists before employee start ({_fmt(sy, sm)}): "
-                    + ", ".join(early)
-                )
+            if sy is not None and sm is not None:
+                start_ym = sy * 12 + sm
+                early = [_fmt(r["year"], r["month"]) for r in effort_months
+                         if r["year"] * 12 + r["month"] < start_ym]
+                if early:
+                    raise ValueError(
+                        f"Effort exists before employee start ({_fmt(sy, sm)}): "
+                        + ", ".join(early)
+                    )
 
-        if ey is not None and em is not None:
-            end_ym = ey * 12 + em
-            late = [_fmt(r["year"], r["month"]) for r in effort_months
-                    if r["year"] * 12 + r["month"] > end_ym]
-            if late:
-                raise ValueError(
-                    f"Effort exists after employee end ({_fmt(ey, em)}): "
-                    + ", ".join(late)
-                )
+            if ey is not None and em is not None:
+                end_ym = ey * 12 + em
+                late = [_fmt(r["year"], r["month"]) for r in effort_months
+                        if r["year"] * 12 + r["month"] > end_ym]
+                if late:
+                    raise ValueError(
+                        f"Effort exists after employee end ({_fmt(ey, em)}): "
+                        + ", ".join(late)
+                    )
+    except ValueError:
+        conn.rollback()
+        conn.close()
+        raise
 
     conn.execute(
         "INSERT INTO audit_log (timestamp, action, details) VALUES (?, ?, ?)",

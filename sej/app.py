@@ -185,15 +185,22 @@ def create_app(db_path=None):
         if salary is not None:
             salary = float(salary)
 
+        date_fields = {}
+        for field in ("start_year", "start_month", "end_year", "end_month"):
+            val = body.get(field)
+            if val is not None:
+                try:
+                    val = int(val)
+                except (TypeError, ValueError):
+                    return jsonify({"error": f"{field} must be an integer"}), 400
+            date_fields[field] = val
+
         try:
             update_employee(
                 db,
                 employee_id,
                 salary=salary,
-                start_year=body.get("start_year"),
-                start_month=body.get("start_month"),
-                end_year=body.get("end_year"),
-                end_month=body.get("end_month"),
+                **date_fields,
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400

@@ -91,9 +91,9 @@ def create_schema(conn: sqlite3.Connection) -> None:
     # Migration: add start/end date columns to employees if they don't exist (for older DBs)
     for col, definition in [
         ("start_year",  "INTEGER"),
-        ("start_month", "INTEGER"),
+        ("start_month", "INTEGER CHECK (start_month BETWEEN 1 AND 12)"),
         ("end_year",    "INTEGER"),
-        ("end_month",   "INTEGER"),
+        ("end_month",   "INTEGER CHECK (end_month BETWEEN 1 AND 12)"),
     ]:
         if col not in employee_cols:
             conn.execute(f"ALTER TABLE employees ADD COLUMN {col} {definition}")
