@@ -1,5 +1,6 @@
 """Queries that reshape the normalized database back into spreadsheet-style rows."""
 
+import csv
 import json
 import sqlite3
 from pathlib import Path
@@ -1352,4 +1353,57 @@ def get_audit_log(db_path: str | Path) -> list[dict]:
             "action": r["action"],
             "details": details,
         })
+    return result
+
+
+def get_project_change_history(db_path: str | Path, project_code: str) -> list[dict]:
+    """Return change history for a project from merge changelog TSVs.
+
+    Reads audit log entries where action='merge' and details has a tsv_path,
+    then reads each TSV and filters rows where project_code matches.
+
+    Returns a list of change groups ordered chronologically (oldest first):
+    [{timestamp, branch_name, changes: [{type, employee, year, month, old_value, new_value}]}]
+
+    Skips TSV files that no longer exist on disk.
+    """
+    conn = get_connection(db_path)
+    create_schema(conn)
+    rows = conn.execute(
+        "SELECT timestamp, details FROM audit_log WHERE action = 'merge' ORDER BY id ASC"
+    ).fetchall()
+    conn.close()
+
+    result = []
+    for r in rows:
+        details = json.loads(r["details"]) if r["details"] else {}
+        tsv_path_str = details.get("tsv_path")
+        if not tsv_path_str:
+            continue
+
+        tsv_path = Path(tsv_path_str)
+        if not tsv_path.exists():
+            continue
+
+        changes = []
+        with open(tsv_path, encoding="utf-8") as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            for row in reader:
+                if row.get("project_code") == project_code:
+                    changes.append({
+                        "type": row.get("type", ""),
+                        "employee": row.get("employee", ""),
+                        "year": row.get("year", ""),
+                        "month": row.get("month", ""),
+                        "old_value": row.get("old_value", ""),
+                        "new_value": row.get("new_value", ""),
+                    })
+
+        if changes:
+            result.append({
+                "timestamp": r["timestamp"],
+                "branch_name": details.get("branch_name", ""),
+                "changes": changes,
+            })
+
     return result

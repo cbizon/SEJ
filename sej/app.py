@@ -26,6 +26,7 @@ from sej.queries import (
     get_groups,
     get_group_details,
     get_project_details,
+    get_project_change_history,
 )
 
 
@@ -383,6 +384,14 @@ def create_app(db_path=None):
         if not project:
             return jsonify({"error": "Missing required parameter: project"}), 400
         return jsonify(get_project_details(main, project))
+
+    @app.route("/api/project-change-history")
+    def api_project_change_history():
+        main = app.config["MAIN_DB_PATH"]
+        project = request.args.get("project", "")
+        if not project:
+            return jsonify({"error": "Missing required parameter: project"}), 400
+        return jsonify(get_project_change_history(main, project))
 
     @app.route("/history")
     def history():
