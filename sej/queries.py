@@ -1374,6 +1374,8 @@ def get_project_change_history(db_path: str | Path, project_code: str) -> list[d
     ).fetchall()
     conn.close()
 
+    merges_dir = Path(db_path).parent / "merges"
+
     result = []
     for r in rows:
         details = json.loads(r["details"]) if r["details"] else {}
@@ -1381,7 +1383,9 @@ def get_project_change_history(db_path: str | Path, project_code: str) -> list[d
         if not tsv_path_str:
             continue
 
-        tsv_path = Path(tsv_path_str)
+        tsv_path = Path(tsv_path_str).resolve()
+        if merges_dir.resolve() not in tsv_path.parents:
+            continue
         if not tsv_path.exists():
             continue
 
