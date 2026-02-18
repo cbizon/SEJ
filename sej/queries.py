@@ -311,10 +311,10 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
 
 
 def get_employees(db_path: str | Path) -> list[dict]:
-    """Return list of employees with their id, name, group, and is_internal flag."""
+    """Return list of employees with their id, name, group, is_internal flag, and salary."""
     conn = get_connection(db_path)
     rows = conn.execute("""
-        SELECT e.id, e.name, g.name AS group_name, g.is_internal
+        SELECT e.id, e.name, g.name AS group_name, g.is_internal, e.salary
         FROM employees e
         JOIN groups g ON g.id = e.group_id
         ORDER BY e.name
@@ -326,6 +326,7 @@ def get_employees(db_path: str | Path) -> list[dict]:
             "name": r["name"],
             "group": r["group_name"],
             "is_internal": bool(r["is_internal"]),
+            "salary": r["salary"],
         }
         for r in rows
     ]
@@ -559,7 +560,8 @@ def add_allocation_line(db_path: str | Path, employee_name: str,
 
 
 def add_employee(db_path: str | Path, last_name: str, first_name: str,
-                 middle_name: str, group_name: str) -> int:
+                 middle_name: str, group_name: str,
+                 salary: float = 120000) -> int:
     """Add a new employee to the given group.
 
     Name is stored as 'LastName,FirstName' or 'LastName,FirstName Middle'
@@ -579,8 +581,8 @@ def add_employee(db_path: str | Path, last_name: str, first_name: str,
         raise ValueError(f"Group not found: {group_name}")
 
     cur = conn.execute(
-        "INSERT INTO employees (name, group_id) VALUES (?, ?)",
-        (name, group["id"]),
+        "INSERT INTO employees (name, group_id, salary) VALUES (?, ?, ?)",
+        (name, group["id"], salary),
     )
     conn.commit()
     emp_id = cur.lastrowid
@@ -952,22 +954,93 @@ def get_nonproject_by_person(db_path: str | Path) -> dict:
     return {"months": month_labels, "rows": result_rows}
 
 
+def _compute_spending_analysis(
+    conn: sqlite3.Connection,
+    project_id: int,
+    personnel_budget: float,
+    start_year: int | None,
+    start_month: int | None,
+    end_year: int,
+    end_month: int,
+) -> list[dict] | None:
+    """Compute remaining personnel budget at end of each month through the project end.
+
+    The chart begins at start_year/start_month (if set) or the first month with
+    effort data.  Returns None if neither is available.
+
+    Within the globally-recorded data range, months with no effort for this project
+    contribute $0 spend (a real zero, not an extrapolation).  Beyond the last
+    globally-recorded month, the last known spend rate for the project is extrapolated
+    forward to the project end.
+    """
+    # Per-project spend by month (only months that have effort > 0)
+    effort_rows = conn.execute("""
+        SELECT e.year, e.month,
+               SUM(emp.salary / 12.0 * e.percentage / 100.0) AS monthly_cost
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN employees emp ON emp.id = al.employee_id
+        WHERE al.project_id = ?
+        GROUP BY e.year, e.month
+        ORDER BY e.year, e.month
+    """, (project_id,)).fetchall()
+
+    costs = {(r["year"], r["month"]): r["monthly_cost"] for r in effort_rows}
+
+    # Last month recorded anywhere in the DB — the boundary of known data
+    last_row = conn.execute(
+        "SELECT year, month FROM efforts ORDER BY year DESC, month DESC LIMIT 1"
+    ).fetchone()
+    data_end = (last_row["year"], last_row["month"]) if last_row else None
+
+    # Determine chart start
+    if start_year is not None and start_month is not None:
+        chart_start = (start_year, start_month)
+    elif effort_rows:
+        chart_start = (effort_rows[0]["year"], effort_rows[0]["month"])
+    else:
+        return None  # No start date and no effort — nothing to plot
+
+    # Spend rate to use for months beyond the end of recorded data
+    extrapolate_cost = costs.get(data_end, 0.0) if data_end else 0.0
+
+    result = []
+    remaining = personnel_budget
+    y, m = chart_start
+    while (y, m) <= (end_year, end_month):
+        if data_end is None or (y, m) <= data_end:
+            # Within the recorded range: real spend (zero if no effort this month)
+            cost = costs.get((y, m), 0.0)
+        else:
+            # Beyond recorded data: hold the last known spend rate
+            cost = extrapolate_cost
+        remaining -= cost
+        result.append({"month": _month_label(y, m), "remaining": round(remaining, 2)})
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+
+    return result
+
+
 def get_project_details(db_path: str | Path, project_code: str) -> dict:
     """Return total FTE and per-person effort for a project by month.
 
     Returns a dict with:
-        months:       list of month label strings in chronological order
-        fte_rows:     [{label, <month>: fte_value, ...}, ...]
-        people:       list of {name, group, <month>: effort_pct, ...} sorted by name
-        project_info: dict with name, start, end, local_pi_name, personnel_budget,
-                      admin_group_name (all optional fields are None when not set)
+        months:            list of month label strings in chronological order
+        fte_rows:          [{label, <month>: fte_value, ...}, ...]
+        people:            list of {name, group, <month>: effort_pct, ...} sorted by name
+        project_info:      dict with name, start, end, local_pi_name, personnel_budget,
+                           admin_group_name (all optional fields are None when not set)
+        spending_analysis: list of {month, remaining} or None if budget/end not set
     """
     conn = get_connection(db_path)
     create_schema(conn)
     months = _discover_months(conn)
 
     proj_row = conn.execute("""
-        SELECT p.name, p.start_year, p.start_month, p.end_year, p.end_month,
+        SELECT p.id, p.name, p.start_year, p.start_month, p.end_year, p.end_month,
                e.name AS local_pi_name, p.personnel_budget,
                g.name AS admin_group_name
         FROM projects p
@@ -982,6 +1055,7 @@ def get_project_details(db_path: str | Path, project_code: str) -> dict:
         return None
 
     project_info = None
+    spending_analysis = None
     if proj_row is not None:
         project_info = {
             "name": proj_row["name"],
@@ -991,6 +1065,15 @@ def get_project_details(db_path: str | Path, project_code: str) -> dict:
             "personnel_budget": proj_row["personnel_budget"],
             "admin_group_name": proj_row["admin_group_name"],
         }
+        budget = proj_row["personnel_budget"]
+        end_y = proj_row["end_year"]
+        end_m = proj_row["end_month"]
+        if budget is not None and end_y is not None and end_m is not None:
+            spending_analysis = _compute_spending_analysis(
+                conn, proj_row["id"], budget,
+                proj_row["start_year"], proj_row["start_month"],
+                end_y, end_m,
+            )
 
     internal_fte_rows = conn.execute("""
         SELECT e.year, e.month, SUM(e.percentage) / 100.0 AS total_fte
@@ -1075,6 +1158,7 @@ def get_project_details(db_path: str | Path, project_code: str) -> dict:
         "fte_rows": fte_result,
         "people": people_result,
         "project_info": project_info,
+        "spending_analysis": spending_analysis,
     }
 
 

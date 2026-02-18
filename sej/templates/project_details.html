@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <title>SEJ - Project Details</title>
     <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         body { font-family: "Segoe UI", Arial, sans-serif; margin: 1rem; background: #f8f9fa; }
         h1 { margin-bottom: 0.25rem; }
@@ -44,6 +45,14 @@
         #project-info dt { font-weight: 600; color: #495057; }
         #project-info dd { margin: 0; }
         #people-table .tabulator-tableholder { padding-bottom: 17px; }
+        #spending-section { display: none; margin-top: 1.5rem; }
+        #spending-chart-wrap {
+            background: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 1rem;
+            max-width: 900px;
+        }
     </style>
 </head>
 <body>
@@ -86,10 +95,18 @@
         <div id="people-table"></div>
     </div>
 
+    <div id="spending-section">
+        <h2>Remaining Personnel Budget</h2>
+        <div id="spending-chart-wrap">
+            <canvas id="spending-chart"></canvas>
+        </div>
+    </div>
+
     <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
     <script>
         let fteTable = null;
         let peopleTable = null;
+        let spendingChart = null;
 
         function fteFormatter(cell) {
             const v = cell.getValue();
@@ -168,6 +185,62 @@
             panel.style.display = "block";
         }
 
+        function showSpendingChart(data) {
+            const section = document.getElementById("spending-section");
+            if (!data || data.length === 0) {
+                section.style.display = "none";
+                return;
+            }
+            section.style.display = "block";
+
+            const labels = data.map(d => d.month);
+            const values = data.map(d => d.remaining);
+
+            if (spendingChart) {
+                spendingChart.data.labels = labels;
+                spendingChart.data.datasets[0].data = values;
+                spendingChart.update();
+                return;
+            }
+
+            const ctx = document.getElementById("spending-chart").getContext("2d");
+            spendingChart = new Chart(ctx, {
+                type: "line",
+                data: {
+                    labels,
+                    datasets: [{
+                        label: "Remaining Budget ($)",
+                        data: values,
+                        borderColor: "#0d6efd",
+                        backgroundColor: "rgba(13,110,253,0.08)",
+                        borderWidth: 2,
+                        pointRadius: 3,
+                        fill: true,
+                        tension: 0,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: ctx => "$" + ctx.parsed.y.toLocaleString(undefined, {maximumFractionDigits: 0}),
+                            },
+                        },
+                    },
+                    scales: {
+                        x: { ticks: { maxRotation: 45 } },
+                        y: {
+                            ticks: {
+                                callback: v => "$" + v.toLocaleString(undefined, {maximumFractionDigits: 0}),
+                            },
+                        },
+                    },
+                },
+            });
+        }
+
         function initTables(months, fte_rows, people) {
             document.getElementById("project-placeholder").style.display = "none";
 
@@ -204,15 +277,16 @@
 
         function loadProject(project) {
             document.getElementById("error").style.display = "none";
-            if (!project) { showProjectInfo(null); return; }
+            if (!project) { showProjectInfo(null); showSpendingChart(null); return; }
 
             fetch(`/api/project-details?project=${encodeURIComponent(project)}`)
                 .then(r => {
                     if (!r.ok) return r.text().then(t => { throw new Error(`Server error ${r.status}: ${t}`); });
                     return r.json();
                 })
-                .then(({ months, fte_rows, people, project_info }) => {
+                .then(({ months, fte_rows, people, project_info, spending_analysis }) => {
                     showProjectInfo(project_info);
+                    showSpendingChart(spending_analysis);
                     if (fteTable === null) {
                         initTables(months, fte_rows, people);
                     } else {

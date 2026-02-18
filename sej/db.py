@@ -22,7 +22,8 @@ def create_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS employees (
             id       INTEGER PRIMARY KEY,
             name     TEXT    UNIQUE NOT NULL,
-            group_id INTEGER NOT NULL REFERENCES groups(id)
+            group_id INTEGER NOT NULL REFERENCES groups(id),
+            salary   REAL    NOT NULL DEFAULT 120000
         );
 
         CREATE TABLE IF NOT EXISTS projects (
@@ -77,6 +78,11 @@ def create_schema(conn: sqlite3.Connection) -> None:
     existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(groups)").fetchall()}
     if "is_internal" not in existing_cols:
         conn.execute("ALTER TABLE groups ADD COLUMN is_internal INTEGER NOT NULL DEFAULT 1")
+
+    # Migration: add salary to employees if it doesn't exist (for older DBs)
+    employee_cols = {r[1] for r in conn.execute("PRAGMA table_info(employees)").fetchall()}
+    if "salary" not in employee_cols:
+        conn.execute("ALTER TABLE employees ADD COLUMN salary REAL NOT NULL DEFAULT 120000")
 
     # Migration: add new project detail columns if they don't exist (for older DBs)
     project_cols = {r[1] for r in conn.execute("PRAGMA table_info(projects)").fetchall()}

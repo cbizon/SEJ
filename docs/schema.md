@@ -34,6 +34,7 @@ People whose effort is being tracked. Each employee belongs to exactly one group
 | `id` | integer | PK |
 | `name` | text | UNIQUE NOT NULL |
 | `group_id` | integer | FK → groups.id, NOT NULL |
+| `salary` | real | NOT NULL DEFAULT 120000 |
 
 ---
 
