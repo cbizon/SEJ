@@ -59,13 +59,15 @@ def get_spreadsheet_rows(db_path: str | Path) -> tuple[list[str], list[list[str]
             al.cost_code_2,
             al.cost_code_3,
             al.program_code,
-            p.project_code,
-            p.name     AS project_name,
+            bl.budget_line_code,
+            COALESCE(bl.display_name, bl.name) AS budget_line_name,
+            p.name      AS project_name,
             {month_sql}
         FROM allocation_lines al
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g       ON g.id  = emp.group_id
-        JOIN projects p     ON p.id  = al.project_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        JOIN projects p     ON p.id  = bl.project_id
         LEFT JOIN efforts e ON e.allocation_line_id = al.id
         GROUP BY al.id
         ORDER BY emp.name, al.id
@@ -77,14 +79,14 @@ def get_spreadsheet_rows(db_path: str | Path) -> tuple[list[str], list[list[str]
     headers = [
         "Employee", "Group", "Fund Code", "Source", "Account",
         "Cost Code 1", "Cost Code 2", "Cost Code 3", "Program Code",
-        "Project Id", "Project Name",
+        "Budget Line Code", "Budget Line Name", "Project",
     ] + [_month_label(y, m) for y, m in months]
 
     result = []
     for row in rows:
         employee = row["employee_name"]
 
-        project_code = row["project_code"]
+        budget_line_code = row["budget_line_code"]
 
         line = [
             employee,
@@ -96,7 +98,8 @@ def get_spreadsheet_rows(db_path: str | Path) -> tuple[list[str], list[list[str]
             row["cost_code_2"] or "",
             row["cost_code_3"] or "",
             row["program_code"] or "",
-            project_code,
+            budget_line_code,
+            row["budget_line_name"] or "",
             row["project_name"] or "",
         ]
 
@@ -141,13 +144,15 @@ def get_spreadsheet_rows_with_ids(db_path: str | Path) -> tuple[list[str], list[
             al.cost_code_2,
             al.cost_code_3,
             al.program_code,
-            p.project_code,
-            p.name     AS project_name,
+            bl.budget_line_code,
+            COALESCE(bl.display_name, bl.name) AS budget_line_name,
+            p.name      AS project_name,
             {month_sql}
         FROM allocation_lines al
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g       ON g.id  = emp.group_id
-        JOIN projects p     ON p.id  = al.project_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        JOIN projects p     ON p.id  = bl.project_id
         LEFT JOIN efforts e ON e.allocation_line_id = al.id
         GROUP BY al.id
         ORDER BY emp.name, al.id
@@ -160,7 +165,7 @@ def get_spreadsheet_rows_with_ids(db_path: str | Path) -> tuple[list[str], list[
         "allocation_line_id",
         "Employee", "Group", "Fund Code", "Source", "Account",
         "Cost Code 1", "Cost Code 2", "Cost Code 3", "Program Code",
-        "Project Id", "Project Name",
+        "Budget Line Code", "Budget Line Name", "Project",
     ] + [_month_label(y, m) for y, m in months]
 
     result = []
@@ -176,7 +181,8 @@ def get_spreadsheet_rows_with_ids(db_path: str | Path) -> tuple[list[str], list[
             row["cost_code_2"] or "",
             row["cost_code_3"] or "",
             row["program_code"] or "",
-            row["project_code"],
+            row["budget_line_code"],
+            row["budget_line_name"] or "",
             row["project_name"] or "",
         ]
 
@@ -339,33 +345,68 @@ def get_employees(db_path: str | Path) -> list[dict]:
 
 
 def get_projects(db_path: str | Path) -> list[dict]:
-    """Return list of projects with their id, code, name, and detail fields."""
+    """Return list of projects with their id, name, and detail fields."""
     conn = get_connection(db_path)
     rows = conn.execute("""
-        SELECT p.id, p.project_code, p.name,
+        SELECT p.id, p.name, p.is_nonproject,
                p.start_year, p.start_month, p.end_year, p.end_month,
                p.local_pi_id, e.name AS local_pi_name,
-               p.personnel_budget,
                p.admin_group_id, g.name AS admin_group_name
         FROM projects p
         LEFT JOIN employees e ON e.id = p.local_pi_id
         LEFT JOIN groups g ON g.id = p.admin_group_id
-        ORDER BY p.project_code
+        ORDER BY p.name
     """).fetchall()
     conn.close()
     return [
         {
             "id": r["id"],
-            "project_code": r["project_code"],
             "name": r["name"],
+            "is_nonproject": bool(r["is_nonproject"]),
             "start_year": r["start_year"],
             "start_month": r["start_month"],
             "end_year": r["end_year"],
             "end_month": r["end_month"],
             "local_pi_id": r["local_pi_id"],
             "local_pi_name": r["local_pi_name"],
-            "personnel_budget": r["personnel_budget"],
             "admin_group_id": r["admin_group_id"],
+            "admin_group_name": r["admin_group_name"],
+        }
+        for r in rows
+    ]
+
+
+def get_budget_lines(db_path: str | Path) -> list[dict]:
+    """Return list of budget lines with their details and related project info."""
+    conn = get_connection(db_path)
+    rows = conn.execute("""
+        SELECT bl.id, bl.budget_line_code, bl.name, bl.display_name,
+               bl.project_id, p.name AS project_name,
+               bl.start_year, bl.start_month, bl.end_year, bl.end_month,
+               bl.personnel_budget,
+               p.local_pi_id, emp.name AS local_pi_name,
+               p.admin_group_id, g.name AS admin_group_name
+        FROM budget_lines bl
+        JOIN projects p ON p.id = bl.project_id
+        LEFT JOIN employees emp ON emp.id = p.local_pi_id
+        LEFT JOIN groups g ON g.id = p.admin_group_id
+        ORDER BY bl.budget_line_code
+    """).fetchall()
+    conn.close()
+    return [
+        {
+            "id": r["id"],
+            "budget_line_code": r["budget_line_code"],
+            "name": r["name"],
+            "display_name": r["display_name"],
+            "project_id": r["project_id"],
+            "project_name": r["project_name"],
+            "start_year": r["start_year"],
+            "start_month": r["start_month"],
+            "end_year": r["end_year"],
+            "end_month": r["end_month"],
+            "personnel_budget": r["personnel_budget"],
+            "local_pi_name": r["local_pi_name"],
             "admin_group_name": r["admin_group_name"],
         }
         for r in rows
@@ -579,11 +620,11 @@ def fix_totals(db_path: str | Path) -> list[dict]:
 
 
 def add_allocation_line(db_path: str | Path, employee_name: str,
-                        project_code: str) -> int:
-    """Add a new allocation line for an employee and project.
+                        budget_line_code: str) -> int:
+    """Add a new allocation line for an employee and budget line.
 
     Returns the new allocation_line_id. Raises ValueError if the employee
-    or project is not found.
+    or budget line is not found.
     """
     conn = get_connection(db_path)
 
@@ -593,15 +634,15 @@ def add_allocation_line(db_path: str | Path, employee_name: str,
     if emp is None:
         raise ValueError(f"Employee not found: {employee_name}")
 
-    proj = conn.execute(
-        "SELECT id FROM projects WHERE project_code = ?", (project_code,)
+    budget_line = conn.execute(
+        "SELECT id FROM budget_lines WHERE budget_line_code = ?", (budget_line_code,)
     ).fetchone()
-    if proj is None:
-        raise ValueError(f"Project not found: {project_code}")
+    if budget_line is None:
+        raise ValueError(f"Budget line not found: {budget_line_code}")
 
     cur = conn.execute(
-        "INSERT INTO allocation_lines (employee_id, project_id) VALUES (?, ?)",
-        (emp["id"], proj["id"]),
+        "INSERT INTO allocation_lines (employee_id, budget_line_id) VALUES (?, ?)",
+        (emp["id"], budget_line["id"]),
     )
     conn.commit()
     line_id = cur.lastrowid
@@ -725,24 +766,24 @@ def _validate_project_fields(
     start_month: int | None,
     end_year: int | None,
     end_month: int | None,
-    personnel_budget: float | None,
 ) -> None:
     """Validate shared constraints for add/update project.
 
     Raises ValueError if:
     - year and month are not both set or both None for a date bound
+    - a year value is not a 4-digit number
     - a month value is outside 1-12
-    - personnel_budget is negative
     """
     if (start_year is None) != (start_month is None):
         raise ValueError("start_year and start_month must both be set or both be empty")
     if (end_year is None) != (end_month is None):
         raise ValueError("end_year and end_month must both be set or both be empty")
+    for label, val in [("start_year", start_year), ("end_year", end_year)]:
+        if val is not None and (val < 1000 or val > 9999):
+            raise ValueError(f"{label} must be a 4-digit number")
     for label, val in [("start_month", start_month), ("end_month", end_month)]:
         if val is not None and not (1 <= val <= 12):
             raise ValueError(f"{label} must be between 1 and 12")
-    if personnel_budget is not None and personnel_budget < 0:
-        raise ValueError("personnel_budget must not be negative")
 
 
 def _validate_employee_fields(
@@ -866,69 +907,58 @@ def add_project(
     end_year: int | None = None,
     end_month: int | None = None,
     local_pi_id: int | None = None,
-    personnel_budget: float | None = None,
     admin_group_id: int | None = None,
-) -> str:
-    """Add a new project with an auto-generated project code.
+) -> int:
+    """Add a new project.
 
-    Finds the maximum numeric project code and increments by 1.
-    Returns the new project_code.
+    Returns the new project id.
     Raises ValueError if local_pi_id refers to an external employee,
-    date year/month are not paired, months are out of range, or budget
-    is negative.
+    date year/month are not paired, years are not 4-digit, or months are out of range.
     """
-    _validate_project_fields(start_year, start_month, end_year, end_month, personnel_budget)
+    _validate_project_fields(start_year, start_month, end_year, end_month)
     conn = get_connection(db_path)
     if local_pi_id is not None:
         _validate_local_pi(conn, local_pi_id)
-    row = conn.execute("""
-        SELECT MAX(CAST(project_code AS INTEGER)) AS max_code
-        FROM projects
-        WHERE project_code GLOB '[0-9]*'
-    """).fetchone()
-    max_code = row["max_code"] if row["max_code"] is not None else 0
-    new_code = str(max_code + 1)
-    conn.execute(
+    cursor = conn.execute(
         """INSERT INTO projects
-           (project_code, name, start_year, start_month, end_year, end_month,
-            local_pi_id, personnel_budget, admin_group_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (new_code, name, start_year, start_month, end_year, end_month,
-         local_pi_id, personnel_budget, admin_group_id),
+           (name, start_year, start_month, end_year, end_month,
+            local_pi_id, admin_group_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (name, start_year, start_month, end_year, end_month,
+         local_pi_id, admin_group_id),
     )
+    project_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    return new_code
+    return project_id
 
 
 def update_project(
     db_path: str | Path,
-    project_code: str,
+    project_id: int,
     name: str | None = None,
     start_year: int | None = None,
     start_month: int | None = None,
     end_year: int | None = None,
     end_month: int | None = None,
     local_pi_id: int | None = None,
-    personnel_budget: float | None = None,
     admin_group_id: int | None = None,
 ) -> None:
     """Update all detail fields on an existing project.
 
     All fields are written on every call — pass None to clear a field.
-    Raises ValueError if the project_code does not exist, local_pi_id
+    Raises ValueError if the project_id does not exist, local_pi_id
     refers to an external employee, date year/month are not paired,
-    months are out of range, budget is negative, or effort exists outside
-    the given dates.
+    years are not 4-digit, months are out of range, or effort exists outside the given dates.
     """
-    _validate_project_fields(start_year, start_month, end_year, end_month, personnel_budget)
+    _validate_project_fields(start_year, start_month, end_year, end_month)
     conn = get_connection(db_path)
     existing = conn.execute(
-        "SELECT id FROM projects WHERE project_code = ?", (project_code,)
+        "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
     if existing is None:
         conn.close()
-        raise ValueError(f"Project not found: {project_code}")
+        raise ValueError(f"Project not found: {project_id}")
     if local_pi_id is not None:
         _validate_local_pi(conn, local_pi_id)
     _validate_project_dates(conn, existing["id"], start_year, start_month, end_year, end_month)
@@ -936,12 +966,214 @@ def update_project(
         """UPDATE projects
            SET name = ?, start_year = ?, start_month = ?,
                end_year = ?, end_month = ?, local_pi_id = ?,
-               personnel_budget = ?, admin_group_id = ?
-           WHERE project_code = ?""",
+               admin_group_id = ?
+           WHERE id = ?""",
         (name, start_year, start_month, end_year, end_month,
-         local_pi_id, personnel_budget, admin_group_id, project_code),
+         local_pi_id, admin_group_id, project_id),
     )
     conn.commit()
+    conn.close()
+
+
+def _validate_budget_line_fields(
+    start_year: int | None,
+    start_month: int | None,
+    end_year: int | None,
+    end_month: int | None,
+    personnel_budget: float | None,
+) -> None:
+    """Validate shared constraints for add/update budget line.
+
+    Raises ValueError if:
+    - year and month are not both set or both None for a date bound
+    - a year value is not a 4-digit number
+    - a month value is outside 1-12
+    - personnel_budget is negative
+    """
+    if (start_year is None) != (start_month is None):
+        raise ValueError("start_year and start_month must both be set or both be empty")
+    if (end_year is None) != (end_month is None):
+        raise ValueError("end_year and end_month must both be set or both be empty")
+    for label, val in [("start_month", start_month), ("end_month", end_month)]:
+        if val is not None and not (1 <= val <= 12):
+            raise ValueError(f"{label} must be between 1 and 12")
+    for label, val in [("start_year", start_year), ("end_year", end_year)]:
+        if val is not None and (val < 1000 or val > 9999):
+            raise ValueError(f"{label} must be a 4-digit number")
+    if personnel_budget is not None and personnel_budget < 0:
+        raise ValueError("personnel_budget must not be negative")
+
+
+def _validate_budget_line_dates(
+    conn: sqlite3.Connection,
+    budget_line_id: int,
+    start_year: int | None,
+    start_month: int | None,
+    end_year: int | None,
+    end_month: int | None,
+) -> None:
+    """Raise ValueError if any effort for the budget line falls outside the date bounds.
+
+    Only checks a bound when both the year and month for that bound are provided.
+    """
+    rows = conn.execute("""
+        SELECT DISTINCT e.year, e.month
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        WHERE al.budget_line_id = ?
+        ORDER BY e.year, e.month
+    """, (budget_line_id,)).fetchall()
+
+    if not rows:
+        return
+
+    def fmt(year: int, month: int) -> str:
+        return f"{_MONTH_ABBR[month]} {year}"
+
+    if start_year is not None and start_month is not None:
+        start_ym = start_year * 12 + start_month
+        early = [fmt(r["year"], r["month"]) for r in rows
+                 if r["year"] * 12 + r["month"] < start_ym]
+        if early:
+            raise ValueError(
+                f"Effort exists before budget line start ({fmt(start_year, start_month)}): "
+                + ", ".join(early)
+            )
+
+    if end_year is not None and end_month is not None:
+        end_ym = end_year * 12 + end_month
+        late = [fmt(r["year"], r["month"]) for r in rows
+                if r["year"] * 12 + r["month"] > end_ym]
+        if late:
+            raise ValueError(
+                f"Effort exists after budget line end ({fmt(end_year, end_month)}): "
+                + ", ".join(late)
+            )
+
+
+def add_budget_line(
+    db_path: str | Path,
+    project_id: int,
+    display_name: str | None = None,
+    budget_line_code: str | None = None,
+    start_year: int | None = None,
+    start_month: int | None = None,
+    end_year: int | None = None,
+    end_month: int | None = None,
+    personnel_budget: float | None = None,
+) -> str:
+    """Add a new budget line to a project.
+
+    If budget_line_code is not provided, generates one by finding the maximum
+    numeric code and incrementing by 1.
+    Returns the budget_line_code.
+    Raises ValueError if date year/month are not paired, months are out of range,
+    years are not 4-digit, budget is negative, or project_id does not exist.
+    """
+    _validate_budget_line_fields(start_year, start_month, end_year, end_month, personnel_budget)
+    conn = get_connection(db_path)
+
+    # Verify project exists
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        conn.close()
+        raise ValueError(f"Project not found: {project_id}")
+
+    # Generate budget_line_code if not provided
+    if budget_line_code is None:
+        row = conn.execute("""
+            SELECT MAX(CAST(budget_line_code AS INTEGER)) AS max_code
+            FROM budget_lines
+            WHERE budget_line_code GLOB '[0-9]*'
+        """).fetchone()
+        max_code = row["max_code"] if row["max_code"] is not None else 0
+        budget_line_code = str(max_code + 1)
+
+    conn.execute(
+        """INSERT INTO budget_lines
+           (budget_line_code, project_id, display_name,
+            start_year, start_month, end_year, end_month, personnel_budget)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (budget_line_code, project_id, display_name,
+         start_year, start_month, end_year, end_month, personnel_budget),
+    )
+    conn.commit()
+    conn.close()
+    return budget_line_code
+
+
+def update_budget_line(
+    db_path: str | Path,
+    budget_line_code: str,
+    display_name: str | None = None,
+    start_year: int | None = None,
+    start_month: int | None = None,
+    end_year: int | None = None,
+    end_month: int | None = None,
+    personnel_budget: float | None = None,
+    project_id: int | None = None,
+) -> None:
+    """Update fields on an existing budget line.
+
+    Only updates fields that are explicitly provided (not None).
+    Raises ValueError if the budget_line_code does not exist, date year/month
+    are not paired, months are out of range, years are not 4-digit, budget is
+    negative, effort exists outside the given dates, or project_id does not exist.
+    """
+    _validate_budget_line_fields(start_year, start_month, end_year, end_month, personnel_budget)
+    conn = get_connection(db_path)
+
+    # Get existing budget line
+    existing = conn.execute(
+        "SELECT id, project_id, display_name, start_year, start_month, end_year, end_month, personnel_budget FROM budget_lines WHERE budget_line_code = ?",
+        (budget_line_code,)
+    ).fetchone()
+    if existing is None:
+        conn.close()
+        raise ValueError(f"Budget line not found: {budget_line_code}")
+
+    # Verify project exists if changing project
+    if project_id is not None:
+        project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if project is None:
+            conn.close()
+            raise ValueError(f"Project not found: {project_id}")
+
+    # Validate dates against existing effort
+    _validate_budget_line_dates(conn, existing["id"], start_year, start_month, end_year, end_month)
+
+    # Build update - only update fields that were provided
+    updates = []
+    params = []
+
+    if display_name is not None:
+        updates.append("display_name = ?")
+        params.append(display_name)
+    if start_year is not None or start_month is not None:
+        updates.append("start_year = ?")
+        updates.append("start_month = ?")
+        params.append(start_year)
+        params.append(start_month)
+    if end_year is not None or end_month is not None:
+        updates.append("end_year = ?")
+        updates.append("end_month = ?")
+        params.append(end_year)
+        params.append(end_month)
+    if personnel_budget is not None:
+        updates.append("personnel_budget = ?")
+        params.append(personnel_budget)
+    if project_id is not None:
+        updates.append("project_id = ?")
+        params.append(project_id)
+
+    if updates:
+        params.append(budget_line_code)
+        conn.execute(
+            f"UPDATE budget_lines SET {', '.join(updates)} WHERE budget_line_code = ?",
+            params,
+        )
+        conn.commit()
+
     conn.close()
 
 
