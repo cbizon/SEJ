@@ -224,13 +224,14 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
             emp.name AS employee_name,
             e.year,
             e.month,
-            SUM(CASE WHEN p.project_code = 'Non-Project' THEN e.percentage ELSE 0 END) AS np_effort,
+            SUM(CASE WHEN p.is_nonproject = 1 THEN e.percentage ELSE 0 END) AS np_effort,
             SUM(e.percentage) AS total_effort
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN projects p ON p.id = al.project_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id\
+        JOIN projects p ON p.id = bl.project_id
         WHERE g.name = ?
         GROUP BY emp.id, e.year, e.month
         ORDER BY emp.name, e.year, e.month
@@ -238,7 +239,9 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
 
     project_rows = conn.execute("""
         SELECT
-            p.project_code,
+            bl.budget_line_code,
+            COALESCE(bl.display_name, bl.name) AS budget_line_name,
+            p.id AS project_id,
             p.name AS project_name,
             e.year,
             e.month,
@@ -247,23 +250,25 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN projects p ON p.id = al.project_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        JOIN projects p ON p.id = bl.project_id
         WHERE g.name = ?
-        GROUP BY p.id, e.year, e.month
-        ORDER BY p.project_code, e.year, e.month
+        GROUP BY bl.id, e.year, e.month
+        ORDER BY bl.budget_line_code, e.year, e.month
     """, (group_name,)).fetchall()
 
     group_total_rows = conn.execute("""
         SELECT
             e.year,
             e.month,
-            SUM(CASE WHEN p.project_code = 'Non-Project' THEN e.percentage ELSE 0 END) AS np_effort,
+            SUM(CASE WHEN p.is_nonproject = 1 THEN e.percentage ELSE 0 END) AS np_effort,
             SUM(e.percentage) AS total_effort
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN projects p ON p.id = al.project_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        JOIN projects p ON p.id = bl.project_id
         WHERE g.name = ?
         GROUP BY e.year, e.month
         ORDER BY e.year, e.month
@@ -298,18 +303,27 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
         total_row.setdefault(label, 0.0)
     people_result.append(total_row)
 
-    # Per-project total effort table
+    # Per-budget-line total effort table
     project_data: dict[str, dict[str, float]] = {}
-    project_names: dict[str, str] = {}
+    project_info: dict[str, dict] = {}
     for r in project_rows:
-        code = r["project_code"]
+        code = r["budget_line_code"]
         label = _month_label(r["year"], r["month"])
         project_data.setdefault(code, {})[label] = r["total_effort"]
-        project_names[code] = r["project_name"] or ""
+        project_info[code] = {
+            "budget_line_name": r["budget_line_name"] or "",
+            "project_id": r["project_id"],
+            "project_name": r["project_name"] or "",
+        }
 
     projects_result: list[dict] = []
     for code in sorted(project_data.keys()):
-        row = {"project_code": code, "project_name": project_names[code]}
+        row = {
+            "budget_line_code": code,
+            "budget_line_name": project_info[code]["budget_line_name"],
+            "project_id": project_info[code]["project_id"],
+            "project_name": project_info[code]["project_name"],
+        }
         for label in month_labels:
             row[label] = round(project_data[code].get(label, 0.0), 1)
         projects_result.append(row)
@@ -406,7 +420,9 @@ def get_budget_lines(db_path: str | Path) -> list[dict]:
             "end_year": r["end_year"],
             "end_month": r["end_month"],
             "personnel_budget": r["personnel_budget"],
+            "local_pi_id": r["local_pi_id"],
             "local_pi_name": r["local_pi_name"],
+            "admin_group_id": r["admin_group_id"],
             "admin_group_name": r["admin_group_name"],
         }
         for r in rows
@@ -490,8 +506,9 @@ def fix_totals(db_path: str | Path) -> list[dict]:
         FROM allocation_lines al
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE p.project_code = 'Non-Project'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id\
+        JOIN projects p ON p.id = bl.project_id
+        WHERE p.is_nonproject = 1
         AND g.is_internal = 1
         ORDER BY al.employee_id,
                  CASE WHEN al.fund_code = '20152' THEN 0 ELSE 1 END,
@@ -549,15 +566,19 @@ def fix_totals(db_path: str | Path) -> list[dict]:
             if diff > 0:
                 # Under 100 — add shortfall to the preferred NP line.
                 if not all_np_lines:
-                    np_project = conn.execute(
-                        "SELECT id FROM projects WHERE project_code = 'Non-Project'"
-                    ).fetchone()
-                    if np_project is None:
+                    # Find the Non-Project budget line (or use the first if multiple exist)
+                    np_budget_line = conn.execute("""
+                        SELECT bl.id FROM budget_lines bl
+                        JOIN projects p ON p.id = bl.project_id
+                        WHERE p.is_nonproject = 1
+                        LIMIT 1
+                    """).fetchone()
+                    if np_budget_line is None:
                         continue
                     cur = conn.execute(
-                        "INSERT INTO allocation_lines (employee_id, project_id)"
+                        "INSERT INTO allocation_lines (employee_id, budget_line_id)"
                         " VALUES (?, ?)",
-                        (emp_id, np_project["id"]),
+                        (emp_id, np_budget_line["id"]),
                     )
                     conn.commit()
                     all_np_lines = [cur.lastrowid]
@@ -730,7 +751,8 @@ def _validate_project_dates(
         SELECT DISTINCT e.year, e.month
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
-        WHERE al.project_id = ?
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE bl.project_id = ?
         ORDER BY e.year, e.month
     """, (project_id,)).fetchall()
 
@@ -944,9 +966,10 @@ def update_project(
     local_pi_id: int | None = None,
     admin_group_id: int | None = None,
 ) -> None:
-    """Update all detail fields on an existing project.
+    """Update detail fields on an existing project.
 
-    All fields are written on every call — pass None to clear a field.
+    All fields except name are written on every call — pass None to clear a field.
+    Name is only updated if explicitly provided (not None).
     Raises ValueError if the project_id does not exist, local_pi_id
     refers to an external employee, date year/month are not paired,
     years are not 4-digit, months are out of range, or effort exists outside the given dates.
@@ -959,18 +982,42 @@ def update_project(
     if existing is None:
         conn.close()
         raise ValueError(f"Project not found: {project_id}")
+
+    # Check for duplicate name if name is being updated
+    if name is not None:
+        duplicate = conn.execute(
+            "SELECT id FROM projects WHERE name = ? AND id != ?", (name, project_id)
+        ).fetchone()
+        if duplicate is not None:
+            conn.close()
+            raise ValueError(f"A project with name '{name}' already exists")
+
     if local_pi_id is not None:
         _validate_local_pi(conn, local_pi_id)
     _validate_project_dates(conn, existing["id"], start_year, start_month, end_year, end_month)
-    conn.execute(
-        """UPDATE projects
-           SET name = ?, start_year = ?, start_month = ?,
-               end_year = ?, end_month = ?, local_pi_id = ?,
-               admin_group_id = ?
-           WHERE id = ?""",
-        (name, start_year, start_month, end_year, end_month,
-         local_pi_id, admin_group_id, project_id),
-    )
+
+    # Build update query - always update dates and ids, optionally update name
+    if name is not None:
+        conn.execute(
+            """UPDATE projects
+               SET name = ?, start_year = ?, start_month = ?,
+                   end_year = ?, end_month = ?, local_pi_id = ?,
+                   admin_group_id = ?
+               WHERE id = ?""",
+            (name, start_year, start_month, end_year, end_month,
+             local_pi_id, admin_group_id, project_id),
+        )
+    else:
+        conn.execute(
+            """UPDATE projects
+               SET start_year = ?, start_month = ?,
+                   end_year = ?, end_month = ?, local_pi_id = ?,
+                   admin_group_id = ?
+               WHERE id = ?""",
+            (start_year, start_month, end_year, end_month,
+             local_pi_id, admin_group_id, project_id),
+        )
+
     conn.commit()
     conn.close()
 
@@ -1194,14 +1241,15 @@ def get_nonproject_by_group(db_path: str | Path) -> dict:
             g.name AS group_name,
             e.year,
             e.month,
-            SUM(CASE WHEN p.project_code = 'Non-Project' THEN e.percentage ELSE 0 END) AS np_effort,
+            SUM(CASE WHEN p.is_nonproject = 1 THEN e.percentage ELSE 0 END) AS np_effort,
             SUM(e.percentage) AS total_effort,
             COUNT(DISTINCT emp.id) AS employee_count
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN projects p ON p.id = al.project_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id\
+        JOIN projects p ON p.id = bl.project_id
         WHERE g.is_internal = 1
         GROUP BY g.id, e.year, e.month
         ORDER BY g.name, e.year, e.month
@@ -1211,14 +1259,15 @@ def get_nonproject_by_group(db_path: str | Path) -> dict:
         SELECT
             e.year,
             e.month,
-            SUM(CASE WHEN p.project_code = 'Non-Project' THEN e.percentage ELSE 0 END) AS np_effort,
+            SUM(CASE WHEN p.is_nonproject = 1 THEN e.percentage ELSE 0 END) AS np_effort,
             SUM(e.percentage) AS total_effort,
             COUNT(DISTINCT emp.id) AS employee_count
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN projects p ON p.id = al.project_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id\
+        JOIN projects p ON p.id = bl.project_id
         WHERE g.is_internal = 1
         GROUP BY e.year, e.month
         ORDER BY e.year, e.month
@@ -1289,13 +1338,14 @@ def get_nonproject_by_person(db_path: str | Path) -> dict:
             g.name AS group_name,
             e.year,
             e.month,
-            SUM(CASE WHEN p.project_code = 'Non-Project' THEN e.percentage ELSE 0 END) AS np_effort,
+            SUM(CASE WHEN p.is_nonproject = 1 THEN e.percentage ELSE 0 END) AS np_effort,
             SUM(e.percentage) AS total_effort
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN projects p ON p.id = al.project_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id\
+        JOIN projects p ON p.id = bl.project_id
         WHERE g.is_internal = 1
         GROUP BY emp.id, e.year, e.month
         ORDER BY emp.name, e.year, e.month
@@ -1305,13 +1355,14 @@ def get_nonproject_by_person(db_path: str | Path) -> dict:
         SELECT
             e.year,
             e.month,
-            SUM(CASE WHEN p.project_code = 'Non-Project' THEN e.percentage ELSE 0 END) AS np_effort,
+            SUM(CASE WHEN p.is_nonproject = 1 THEN e.percentage ELSE 0 END) AS np_effort,
             SUM(e.percentage) AS total_effort
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN projects p ON p.id = al.project_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id\
+        JOIN projects p ON p.id = bl.project_id
         WHERE g.is_internal = 1
         GROUP BY e.year, e.month
         ORDER BY e.year, e.month
@@ -1351,34 +1402,34 @@ def get_nonproject_by_person(db_path: str | Path) -> dict:
 
 def _compute_spending_analysis(
     conn: sqlite3.Connection,
-    project_id: int,
+    budget_line_id: int,
     personnel_budget: float,
     start_year: int | None,
     start_month: int | None,
     end_year: int,
     end_month: int,
 ) -> list[dict] | None:
-    """Compute remaining personnel budget at end of each month through the project end.
+    """Compute remaining personnel budget at end of each month through the budget line end.
 
     The chart begins at start_year/start_month (if set) or the first month with
     effort data.  Returns None if neither is available.
 
-    Within the globally-recorded data range, months with no effort for this project
+    Within the globally-recorded data range, months with no effort for this budget line
     contribute $0 spend (a real zero, not an extrapolation).  Beyond the last
-    globally-recorded month, the last known spend rate for the project is extrapolated
-    forward to the project end.
+    globally-recorded month, the last known spend rate is extrapolated
+    forward to the end date.
     """
-    # Per-project spend by month (only months that have effort > 0)
+    # Per-budget-line spend by month (only months that have effort > 0)
     effort_rows = conn.execute("""
         SELECT e.year, e.month,
                SUM(emp.salary / 12.0 * e.percentage / 100.0) AS monthly_cost
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
-        WHERE al.project_id = ?
+        WHERE al.budget_line_id = ?
         GROUP BY e.year, e.month
         ORDER BY e.year, e.month
-    """, (project_id,)).fetchall()
+    """, (budget_line_id,)).fetchall()
 
     costs = {(r["year"], r["month"]): r["monthly_cost"] for r in effort_rows}
 
@@ -1419,8 +1470,8 @@ def _compute_spending_analysis(
     return result
 
 
-def get_project_details(db_path: str | Path, project_code: str) -> dict:
-    """Return total FTE and per-person effort for a project by month.
+def get_project_details(db_path: str | Path, budget_line: str) -> dict:
+    """Return total FTE and per-person effort for a budget line by month.
 
     Returns a dict with:
         months:            list of month label strings in chronological order
@@ -1435,14 +1486,16 @@ def get_project_details(db_path: str | Path, project_code: str) -> dict:
     months = _discover_months(conn)
 
     proj_row = conn.execute("""
-        SELECT p.id, p.name, p.start_year, p.start_month, p.end_year, p.end_month,
-               e.name AS local_pi_name, p.personnel_budget,
+        SELECT bl.id, COALESCE(bl.display_name, bl.name) AS name,
+               bl.start_year, bl.start_month, bl.end_year, bl.end_month,
+               e.name AS local_pi_name, bl.personnel_budget,
                g.name AS admin_group_name
-        FROM projects p
+        FROM budget_lines bl
+        JOIN projects p ON p.id = bl.project_id
         LEFT JOIN employees e ON e.id = p.local_pi_id
         LEFT JOIN groups g ON g.id = p.admin_group_id
-        WHERE p.project_code = ?
-    """, (project_code,)).fetchone()
+        WHERE bl.budget_line_code = ?
+    """, (budget_line,)).fetchone()
 
     if proj_row is not None:
         sy, sm = proj_row["start_year"], proj_row["start_month"]
@@ -1484,11 +1537,11 @@ def get_project_details(db_path: str | Path, project_code: str) -> dict:
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE p.project_code = ? AND g.is_internal = 1
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE bl.budget_line_code = ? AND g.is_internal = 1
         GROUP BY e.year, e.month
         ORDER BY e.year, e.month
-    """, (project_code,)).fetchall()
+    """, (budget_line,)).fetchall()
 
     external_fte_rows = conn.execute("""
         SELECT e.year, e.month, SUM(e.percentage) / 100.0 AS total_fte
@@ -1496,11 +1549,11 @@ def get_project_details(db_path: str | Path, project_code: str) -> dict:
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE p.project_code = ? AND g.is_internal = 0
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE bl.budget_line_code = ? AND g.is_internal = 0
         GROUP BY e.year, e.month
         ORDER BY e.year, e.month
-    """, (project_code,)).fetchall()
+    """, (budget_line,)).fetchall()
 
     person_rows = conn.execute("""
         SELECT
@@ -1513,11 +1566,11 @@ def get_project_details(db_path: str | Path, project_code: str) -> dict:
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE p.project_code = ?
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE bl.budget_line_code = ?
         GROUP BY emp.id, e.year, e.month
         ORDER BY emp.name, e.year, e.month
-    """, (project_code,)).fetchall()
+    """, (budget_line,)).fetchall()
     conn.close()
 
     month_labels = [_month_label(y, m) for y, m in months]
@@ -1588,11 +1641,11 @@ def get_audit_log(db_path: str | Path) -> list[dict]:
     return result
 
 
-def get_project_change_history(db_path: str | Path, project_code: str) -> list[dict]:
-    """Return change history for a project from merge changelog TSVs.
+def get_project_change_history(db_path: str | Path, budget_line_code: str) -> list[dict]:
+    """Return change history for a budget line from merge changelog TSVs.
 
     Reads audit log entries where action='merge' and details has a tsv_path,
-    then reads each TSV and filters rows where project_code matches.
+    then reads each TSV and filters rows where budget_line_code matches.
 
     Returns a list of change groups ordered chronologically (oldest first):
     [{timestamp, branch_name, changes: [{type, employee, year, month, old_value, new_value}]}]
@@ -1625,7 +1678,9 @@ def get_project_change_history(db_path: str | Path, project_code: str) -> list[d
         with open(tsv_path, encoding="utf-8") as fh:
             reader = csv.DictReader(fh, delimiter="\t")
             for row in reader:
-                if row.get("project_code") == project_code:
+                # Check both old (project_code) and new (budget_line_code) column names for compatibility
+                row_code = row.get("budget_line_code") or row.get("project_code")
+                if row_code == budget_line_code:
                     changes.append({
                         "type": row.get("type", ""),
                         "employee": row.get("employee", ""),
