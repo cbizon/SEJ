@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>SEJ - Budget Lines</title>
+    <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator.min.css" rel="stylesheet">
+    <style>
+        body { font-family: "Segoe UI", Arial, sans-serif; margin: 1rem; background: #f8f9fa; }
+        h1 { margin-bottom: 0.25rem; }
+        h2 { margin-top: 1rem; margin-bottom: 0.25rem; }
+        nav { margin-bottom: 0.5rem; }
+        nav a { margin-right: 1rem; text-decoration: none; color: #0d6efd; }
+        nav a:hover { text-decoration: underline; }
+        #branch-banner {
+            display: none;
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 8px 14px;
+            margin-bottom: 0.5rem;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        #toolbar { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        #projects-toolbar { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
+        button { cursor: pointer; padding: 4px 10px; }
+        #edit-data-btn { background: #0d6efd; color: #fff; border: 1px solid #0d6efd; }
+        #save-btn { background: #198754; color: #fff; border: 1px solid #198754; }
+        #discard-btn { background: #dc3545; color: #fff; border: 1px solid #dc3545; }
+        #new-project-btn, #add-group-btn, #add-budget-line-btn { background: #0d6efd; color: #fff; border: 1px solid #0d6efd; }
+        #np-create-btn { background: #198754; color: #fff; border: 1px solid #198754; }
+        #new-project-form {
+            display: none;
+            margin-bottom: 0.75rem;
+            padding: 10px 14px;
+            background: #e9ecef;
+            border: 1px solid #adb5bd;
+            border-radius: 4px;
+        }
+        .np-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+        .np-row label { min-width: 90px; font-weight: 600; }
+        .np-row input, .np-row select { padding: 3px 6px; min-width: 220px; }
+        .np-actions { margin-top: 8px; display: flex; gap: 8px; }
+        #projects-table { margin-bottom: 0.5rem; }
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.4);
+            z-index: 300;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-overlay.open { display: flex; }
+        .modal-form {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            min-width: 320px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+        .modal-form label { display: block; margin-top: 10px; font-weight: 600; }
+        .modal-form input, .modal-form select { width: 100%; padding: 6px; margin-top: 4px; box-sizing: border-box; }
+        .modal-form .btn-row { margin-top: 14px; display: flex; gap: 8px; justify-content: flex-end; }
+    </style>
+</head>
+<body>
+    <h1>Budget Lines</h1>
+    <nav>
+        <a href="/">Main</a>
+        <a href="/reports">Reports</a>
+    </nav>
+    <div id="branch-banner"></div>
+    <div id="toolbar">
+        <button id="edit-data-btn" style="display:none">Edit data</button>
+        <button id="save-btn" style="display:none">Save changes</button>
+        <button id="discard-btn" style="display:none">Discard changes</button>
+    </div>
+
+    <h2>Projects</h2>
+    <div id="projects-toolbar">
+        <button id="new-project-btn" style="display:none">New Project</button>
+        <button id="add-group-btn" style="display:none">New Group</button>
+    </div>
+    <div id="new-project-form">
+        <strong>New Project</strong>
+        <div class="np-row" style="margin-top: 8px;">
+            <label>Name *</label>
+            <input type="text" id="np-name" placeholder="Project name">
+        </div>
+        <div class="np-row">
+            <label>Local PI</label>
+            <select id="np-pi"></select>
+        </div>
+        <div class="np-row">
+            <label>Admin Group</label>
+            <select id="np-group"></select>
+        </div>
+        <div class="np-row">
+            <label>Start</label>
+            <input type="text" id="np-start" placeholder="Mon YYYY">
+        </div>
+        <div class="np-row">
+            <label>End</label>
+            <input type="text" id="np-end" placeholder="Mon YYYY">
+        </div>
+        <div class="np-actions">
+            <button id="np-create-btn">Create</button>
+            <button id="np-cancel-btn">Cancel</button>
+        </div>
+    </div>
+    <div id="projects-table"></div>
+
+    <h2>Budget Lines</h2>
+    <div id="budget-lines-toolbar" style="margin-bottom:0.5rem">
+        <button id="add-budget-line-btn" style="display:none">New budget line</button>
+    </div>
+    <div id="table"></div>
+
+    <div id="add-budget-line-overlay" class="modal-overlay">
+        <div class="modal-form">
+            <h3 style="margin-top:0">Add Budget Line</h3>
+            <label>Project</label>
+            <select id="abl-project"></select>
+            <label>Display Name <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
+            <input id="abl-display-name" placeholder="Enter display name">
+            <label>Start <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
+            <div style="display:flex;gap:8px;margin-top:4px">
+                <select id="abl-start-month" style="flex:1">
+                    <option value="">Month</option>
+                    <option value="1">Jan</option><option value="2">Feb</option>
+                    <option value="3">Mar</option><option value="4">Apr</option>
+                    <option value="5">May</option><option value="6">Jun</option>
+                    <option value="7">Jul</option><option value="8">Aug</option>
+                    <option value="9">Sep</option><option value="10">Oct</option>
+                    <option value="11">Nov</option><option value="12">Dec</option>
+                </select>
+                <input id="abl-start-year" type="number" placeholder="Year" style="width:80px">
+            </div>
+            <label>End <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
+            <div style="display:flex;gap:8px;margin-top:4px">
+                <select id="abl-end-month" style="flex:1">
+                    <option value="">Month</option>
+                    <option value="1">Jan</option><option value="2">Feb</option>
+                    <option value="3">Mar</option><option value="4">Apr</option>
+                    <option value="5">May</option><option value="6">Jun</option>
+                    <option value="7">Jul</option><option value="8">Aug</option>
+                    <option value="9">Sep</option><option value="10">Oct</option>
+                    <option value="11">Nov</option><option value="12">Dec</option>
+                </select>
+                <input id="abl-end-year" type="number" placeholder="Year" style="width:80px">
+            </div>
+            <label>Personnel Budget <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
+            <input id="abl-budget" type="number" placeholder="e.g. 500000" step="any" min="0">
+            <div class="btn-row">
+                <button id="abl-cancel">Cancel</button>
+                <button id="abl-submit">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="add-group-overlay" class="modal-overlay">
+        <div class="modal-form">
+            <h3 style="margin-top:0">Add Group</h3>
+            <label>Group Name</label>
+            <input id="ag-name" placeholder="Enter group name">
+            <label>Type</label>
+            <div style="margin-top:6px;display:flex;gap:16px;">
+                <label style="font-weight:normal;display:flex;align-items:center;gap:4px;">
+                    <input type="radio" name="ag-type" id="ag-internal" value="internal" checked> Internal
+                </label>
+                <label style="font-weight:normal;display:flex;align-items:center;gap:4px;">
+                    <input type="radio" name="ag-type" id="ag-external" value="external"> External
+                </label>
+            </div>
+            <div class="btn-row">
+                <button id="ag-cancel">Cancel</button>
+                <button id="ag-submit">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+    <script>
+        const MONTH_ABBR = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+        function formatDate(year, month) {
+            if (year == null || month == null) return "";
+            return MONTH_ABBR[month] + " " + year;
+        }
+
+        function parseDateString(s) {
+            // Parse "Jan 2025" → {month: 1, year: 2025}
+            if (!s || !s.trim()) return {month: null, year: null};
+            const parts = s.trim().split(/\s+/);
+            if (parts.length !== 2) return {month: null, year: null};
+            const mi = MONTH_ABBR.indexOf(parts[0]);
+            const yr = parseInt(parts[1]);
+            if (mi < 1 || isNaN(yr) || !/^\d{4}$/.test(parts[1])) return {month: null, year: null};
+            return {month: mi, year: yr};
+        }
+
+        function dateEditor(cell, onRendered, success, cancel) {
+            const val = cell.getValue() || "";
+            const input = document.createElement("input");
+            input.type = "text";
+            input.value = val;
+            input.placeholder = "Mon YYYY";
+            input.style.width = "100%";
+            input.style.boxSizing = "border-box";
+            input.style.padding = "4px";
+
+            onRendered(function() {
+                input.focus();
+                input.select();
+            });
+
+            input.addEventListener("blur", function() {
+                const v = input.value.trim();
+                if (!v) {
+                    success("");
+                } else {
+                    const parsed = parseDateString(v);
+                    if (parsed.month === null) {
+                        alert("Invalid date format. Use 'Mon YYYY' (e.g. Jan 2025)");
+                        cancel();
+                    } else {
+                        success(formatDate(parsed.year, parsed.month));
+                    }
+                }
+            });
+
+            input.addEventListener("keydown", function(e) {
+                if (e.key === "Enter") input.blur();
+                if (e.key === "Escape") cancel();
+            });
+
+            return input;
+        }
+
+        let projectsList = [];
+        let projectMap = {};  // id → project obj
+        let editable = false;
+
+        Promise.all([
+            fetch("/api/budget-lines").then(r => r.json()),
+            fetch("/api/branch").then(r => r.json()),
+            fetch("/api/projects").then(r => r.json()),
+            fetch("/api/employees").then(r => r.json()),
+            fetch("/api/groups").then(r => r.json()),
+        ]).then(([budgetLines, branchInfo, projects, employees, groups]) => {
+            projectsList = projects;
+            projects.forEach(p => { projectMap[p.id] = p; });
+
+            editable = branchInfo.db_role === "branch";
+
+            if (editable && branchInfo.branch_name) {
+                const banner = document.getElementById("branch-banner");
+                banner.textContent = "Editing branch: " + branchInfo.branch_name;
+                banner.style.display = "block";
+                document.getElementById("add-budget-line-btn").style.display = "";
+                document.getElementById("add-group-btn").style.display = "";
+                document.getElementById("save-btn").style.display = "";
+                document.getElementById("discard-btn").style.display = "";
+                document.getElementById("new-project-btn").style.display = "";
+            } else {
+                document.getElementById("edit-data-btn").style.display = "";
+            }
+
+            // Internal employees only for local PI
+            const internalEmployees = employees.filter(e => e.is_internal);
+
+            // Populate new-project form selects
+            const piSelect = document.getElementById("np-pi");
+            const groupSelect = document.getElementById("np-group");
+            piSelect.innerHTML = '<option value="">-- None --</option>';
+            internalEmployees.forEach(e => {
+                const opt = document.createElement("option");
+                opt.value = e.id;
+                opt.textContent = e.name;
+                piSelect.appendChild(opt);
+            });
+            groupSelect.innerHTML = '<option value="">-- None --</option>';
+            groups.forEach(g => {
+                const opt = document.createElement("option");
+                opt.value = g.id;
+                opt.textContent = g.name;
+                groupSelect.appendChild(opt);
+            });
+
+            // ---- Projects table ----
+            const editableProjects = projects.filter(p => !p.is_nonproject);
+
+            const piValues = {"": ""};
+            internalEmployees.forEach(e => { piValues[e.name] = e.name; });
+            const groupValues = {"": ""};
+            groups.forEach(g => { groupValues[g.name] = g.name; });
+
+            const piNameToEmp = {};
+            internalEmployees.forEach(e => { piNameToEmp[e.name] = e; });
+            // Keep piNameToId as a derived alias for any other uses
+            const piNameToId = {};
+            internalEmployees.forEach(e => { piNameToId[e.name] = e.id; });
+            const groupNameToId = {};
+            groups.forEach(g => { groupNameToId[g.name] = g.id; });
+
+            const projectsTableData = editableProjects.map(p => ({
+                id: p.id,
+                name: p.name,
+                local_pi_id: p.local_pi_id,
+                local_pi_name: p.local_pi_name || "",
+                admin_group_id: p.admin_group_id,
+                admin_group_name: p.admin_group_name || "",
+                start: formatDate(p.start_year, p.start_month),
+                end: formatDate(p.end_year, p.end_month),
+                _start_year: p.start_year,
+                _start_month: p.start_month,
+                _end_year: p.end_year,
+                _end_month: p.end_month,
+            }));
+
+            const projectsCols = [
+                {title: "Name", field: "name", headerFilter: "input",
+                 editor: editable ? "input" : false},
+                {title: "Local PI", field: "local_pi_name", headerFilter: "input",
+                 editor: editable ? "list" : false,
+                 editorParams: editable ? {values: piValues, autocomplete: true, listOnEmpty: true} : undefined},
+                {title: "Admin Group", field: "admin_group_name", headerFilter: "input",
+                 editor: editable ? "list" : false,
+                 editorParams: editable ? {values: groupValues, autocomplete: true, listOnEmpty: true} : undefined},
+                {title: "Start", field: "start", editor: editable ? dateEditor : false},
+                {title: "End", field: "end", editor: editable ? dateEditor : false},
+            ];
+
+            const projectsTab = new Tabulator("#projects-table", {
+                data: projectsTableData,
+                columns: projectsCols,
+                layout: "fitDataFill",
+                height: "30vh",
+                initialSort: [{column: "name", dir: "asc"}],
+            });
+
+            if (editable) {
+                projectsTab.on("cellEdited", function(cell) {
+                    const field = cell.getField();
+                    const rowData = cell.getRow().getData();
+
+                    // Always send all fields so update_project doesn't accidentally clear them
+                    const payload = {
+                        project_id: rowData.id,
+                        name: rowData.name,
+                        local_pi_id: rowData.local_pi_id,
+                        admin_group_id: rowData.admin_group_id,
+                        start_year: rowData._start_year,
+                        start_month: rowData._start_month,
+                        end_year: rowData._end_year,
+                        end_month: rowData._end_month,
+                    };
+
+                    if (field === "start") {
+                        const parsed = parseDateString(cell.getValue());
+                        payload.start_year = parsed.year;
+                        payload.start_month = parsed.month;
+                    } else if (field === "end") {
+                        const parsed = parseDateString(cell.getValue());
+                        payload.end_year = parsed.year;
+                        payload.end_month = parsed.month;
+                    } else if (field === "name") {
+                        const newName = cell.getValue().trim();
+                        if (!newName) {
+                            alert("Project name cannot be empty");
+                            cell.restoreOldValue();
+                            return;
+                        }
+                        payload.name = newName;
+                    } else if (field === "local_pi_name") {
+                        const newName = cell.getValue();
+                        if (!newName) {
+                            payload.local_pi_id = null;
+                        } else {
+                            const emp = piNameToEmp[newName];
+                            if (emp === undefined) {
+                                alert("Unknown employee: " + newName);
+                                cell.restoreOldValue();
+                                return;
+                            }
+                            payload.local_pi_id = emp.id;
+                            // Auto-set admin group to the PI's group
+                            const groupId = groupNameToId[emp.group];
+                            if (groupId !== undefined) {
+                                payload.admin_group_id = groupId;
+                                cell.getRow().update({
+                                    admin_group_id: groupId,
+                                    admin_group_name: emp.group,
+                                });
+                            }
+                        }
+                    } else if (field === "admin_group_name") {
+                        const newName = cell.getValue();
+                        if (!newName) {
+                            payload.admin_group_id = null;
+                        } else {
+                            const newId = groupNameToId[newName];
+                            if (newId === undefined) {
+                                alert("Unknown group: " + newName);
+                                cell.restoreOldValue();
+                                return;
+                            }
+                            payload.admin_group_id = newId;
+                        }
+                    }
+
+                    fetch("/api/project", {
+                        method: "PUT",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify(payload),
+                    }).then(r => {
+                        if (!r.ok) {
+                            r.json().then(d => {
+                                alert("Error: " + d.error);
+                                cell.restoreOldValue();
+                            });
+                        } else {
+                            location.reload();
+                        }
+                    });
+                });
+            }
+
+            // New Project button/form
+            document.getElementById("new-project-btn").addEventListener("click", function() {
+                document.getElementById("new-project-form").style.display = "block";
+                document.getElementById("np-name").focus();
+            });
+            document.getElementById("np-cancel-btn").addEventListener("click", function() {
+                document.getElementById("new-project-form").style.display = "none";
+                document.getElementById("np-name").value = "";
+                document.getElementById("np-start").value = "";
+                document.getElementById("np-end").value = "";
+                piSelect.value = "";
+                groupSelect.value = "";
+            });
+            document.getElementById("np-create-btn").addEventListener("click", function() {
+                const name = document.getElementById("np-name").value.trim();
+                if (!name) {
+                    alert("Project name is required");
+                    return;
+                }
+                const piVal = piSelect.value;
+                const grpVal = groupSelect.value;
+                const startParsed = parseDateString(document.getElementById("np-start").value);
+                const endParsed = parseDateString(document.getElementById("np-end").value);
+                const payload = {
+                    name: name,
+                    local_pi_id: piVal ? parseInt(piVal) : null,
+                    admin_group_id: grpVal ? parseInt(grpVal) : null,
+                    start_year: startParsed.year,
+                    start_month: startParsed.month,
+                    end_year: endParsed.year,
+                    end_month: endParsed.month,
+                };
+                fetch("/api/project", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify(payload),
+                }).then(r => {
+                    if (!r.ok) {
+                        r.json().then(d => { alert("Error: " + d.error); });
+                    } else {
+                        location.reload();
+                    }
+                });
+            });
+
+            // ---- Budget Lines table ----
+
+            // Build project name → id lookup
+            const projectNameToId = {};
+            projects.forEach(p => { projectNameToId[p.name] = p.id; });
+
+            // Prepare table data with formatted date columns
+            const tableData = budgetLines.map(bl => ({
+                id: bl.id,
+                budget_line_code: bl.budget_line_code,
+                finance_name: bl.name || "",
+                display_name: bl.display_name || "",
+                project_id: bl.project_id,
+                project_name: bl.project_name || "",
+                local_pi_name: bl.local_pi_name || "",
+                admin_group_name: bl.admin_group_name || "",
+                start: formatDate(bl.start_year, bl.start_month),
+                end: formatDate(bl.end_year, bl.end_month),
+                personnel_budget: bl.personnel_budget,
+                // Keep raw values for sending updates
+                _start_year: bl.start_year,
+                _start_month: bl.start_month,
+                _end_year: bl.end_year,
+                _end_month: bl.end_month,
+            }));
+
+            // Build project dropdown values for editor
+            const projectValues = {};
+            projects.forEach(p => { projectValues[p.name] = p.name; });
+
+            const colDefs = [
+                {title: "Display Name", field: "display_name", headerFilter: "input",
+                 editor: editable ? "input" : false},
+                {title: "Project", field: "project_name", headerFilter: "input",
+                 editor: editable ? "list" : false,
+                 editorParams: editable ? {values: projectValues, autocomplete: true, listOnEmpty: true} : undefined},
+                {title: "Start", field: "start",
+                 editor: editable ? dateEditor : false},
+                {title: "End", field: "end",
+                 editor: editable ? dateEditor : false},
+                {title: "Personnel Budget", field: "personnel_budget",
+                 editor: editable ? "number" : false,
+                 editorParams: editable ? {min: 0, step: 1000} : undefined,
+                 formatter: "money", formatterParams: {thousand: ",", symbol: "$", precision: 0}},
+                {title: "Code", field: "budget_line_code", headerFilter: "input"},
+                {title: "Finance Name", field: "finance_name", headerFilter: "input"},
+            ];
+
+            const table = new Tabulator("#table", {
+                data: tableData,
+                columns: colDefs,
+                layout: "fitDataFill",
+                height: "85vh",
+                initialSort: [{column: "budget_line_code", dir: "asc"}],
+            });
+
+            if (editable) {
+                table.on("cellEdited", function(cell) {
+                    const field = cell.getField();
+                    const rowData = cell.getRow().getData();
+                    const code = rowData.budget_line_code;
+
+                    // Determine what changed and build payload
+                    let startParsed, endParsed;
+
+                    if (field === "start") {
+                        startParsed = parseDateString(cell.getValue());
+                        rowData._start_year = startParsed.year;
+                        rowData._start_month = startParsed.month;
+                    } else {
+                        startParsed = {year: rowData._start_year, month: rowData._start_month};
+                    }
+
+                    if (field === "end") {
+                        endParsed = parseDateString(cell.getValue());
+                        rowData._end_year = endParsed.year;
+                        rowData._end_month = endParsed.month;
+                    } else {
+                        endParsed = {year: rowData._end_year, month: rowData._end_month};
+                    }
+
+                    const payload = {
+                        budget_line_code: code,
+                        display_name: rowData.display_name || null,
+                        start_year: startParsed.year,
+                        start_month: startParsed.month,
+                        end_year: endParsed.year,
+                        end_month: endParsed.month,
+                        personnel_budget: rowData.personnel_budget,
+                    };
+
+                    // If project changed, include project_id
+                    if (field === "project_name") {
+                        const newProjectName = cell.getValue();
+                        const newProjectId = projectNameToId[newProjectName];
+                        if (newProjectId === undefined) {
+                            alert("Unknown project: " + newProjectName);
+                            cell.restoreOldValue();
+                            return;
+                        }
+                        payload.project_id = newProjectId;
+                        // Update derived fields in the row
+                        const proj = projectMap[newProjectId];
+                        cell.getRow().update({
+                            project_id: newProjectId,
+                            local_pi_name: proj.local_pi_name || "",
+                            admin_group_name: proj.admin_group_name || "",
+                        });
+                    }
+
+                    fetch("/api/budget-line", {
+                        method: "PUT",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify(payload),
+                    }).then(r => {
+                        if (!r.ok) {
+                            r.json().then(d => {
+                                alert("Error: " + d.error);
+                                cell.restoreOldValue();
+                            });
+                        }
+                    });
+                });
+            }
+
+            // Add Budget Line
+            document.getElementById("add-budget-line-btn").addEventListener("click", function() {
+                document.getElementById("abl-display-name").value = "";
+                document.getElementById("abl-start-month").value = "";
+                document.getElementById("abl-start-year").value = "";
+                document.getElementById("abl-end-month").value = "";
+                document.getElementById("abl-end-year").value = "";
+                document.getElementById("abl-budget").value = "";
+
+                const projSel = document.getElementById("abl-project");
+                projSel.innerHTML = "";
+                projects.filter(p => !p.is_nonproject).forEach(p => {
+                    const opt = document.createElement("option");
+                    opt.value = p.id;
+                    opt.textContent = p.name;
+                    projSel.appendChild(opt);
+                });
+
+                document.getElementById("add-budget-line-overlay").classList.add("open");
+            });
+
+            document.getElementById("abl-cancel").addEventListener("click", function() {
+                document.getElementById("add-budget-line-overlay").classList.remove("open");
+            });
+
+            document.getElementById("abl-submit").addEventListener("click", function() {
+                const projectId = document.getElementById("abl-project").value;
+                if (!projectId) {
+                    alert("Project is required.");
+                    return;
+                }
+                const displayName = document.getElementById("abl-display-name").value.trim();
+                const startMonth = document.getElementById("abl-start-month").value;
+                const startYear = document.getElementById("abl-start-year").value;
+                const endMonth = document.getElementById("abl-end-month").value;
+                const endYear = document.getElementById("abl-end-year").value;
+                const budget = document.getElementById("abl-budget").value;
+
+                fetch("/api/budget-line", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({
+                        project_id: parseInt(projectId),
+                        display_name: displayName || null,
+                        start_month: startMonth ? parseInt(startMonth) : null,
+                        start_year: startYear ? parseInt(startYear) : null,
+                        end_month: endMonth ? parseInt(endMonth) : null,
+                        end_year: endYear ? parseInt(endYear) : null,
+                        personnel_budget: budget !== "" ? parseFloat(budget) : null,
+                    }),
+                }).then(r => {
+                    if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
+                    return r.json();
+                }).then(() => {
+                    document.getElementById("add-budget-line-overlay").classList.remove("open");
+                    location.reload();
+                });
+            });
+
+            // Add Group
+            document.getElementById("add-group-btn").addEventListener("click", function() {
+                document.getElementById("ag-name").value = "";
+                document.getElementById("ag-internal").checked = true;
+                document.getElementById("add-group-overlay").classList.add("open");
+            });
+
+            document.getElementById("ag-cancel").addEventListener("click", function() {
+                document.getElementById("add-group-overlay").classList.remove("open");
+            });
+
+            document.getElementById("ag-submit").addEventListener("click", function() {
+                const name = document.getElementById("ag-name").value.trim();
+                if (!name) {
+                    alert("Group name is required.");
+                    return;
+                }
+                const isInternal = document.getElementById("ag-internal").checked;
+                fetch("/api/group", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({ name, is_internal: isInternal }),
+                }).then(r => {
+                    if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
+                    return r.json();
+                }).then(() => {
+                    document.getElementById("add-group-overlay").classList.remove("open");
+                    location.reload();
+                });
+            });
+
+            // Edit / Save / Discard handlers
+            document.getElementById("edit-data-btn").addEventListener("click", function() {
+                fetch("/api/branch/create", {method: "POST"})
+                    .then(r => {
+                        if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
+                        return r.json();
+                    })
+                    .then(function() { location.reload(); });
+            });
+
+            document.getElementById("save-btn").addEventListener("click", function() {
+                fetch("/api/branch/merge", {method: "POST"})
+                    .then(r => {
+                        if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
+                        return r.json();
+                    })
+                    .then(function() { location.reload(); });
+            });
+
+            document.getElementById("discard-btn").addEventListener("click", function() {
+                if (!confirm("Discard all changes? This cannot be undone.")) return;
+                fetch("/api/branch/discard", {method: "POST"})
+                    .then(r => {
+                        if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
+                        return r.json();
+                    })
+                    .then(function() { location.reload(); });
+            });
+        });
+    </script>
+</body>
+</html>

@@ -122,37 +122,37 @@ def diff_databases(main_db_path: str | Path, branch_db_path_: str | Path) -> lis
     Each record is a dict with:
         type: "effort_changed" | "effort_added" | "effort_removed" |
               "allocation_line_added" | "allocation_line_removed"
-        employee, project_code, year (optional), month (optional),
+        employee, budget_line_code, year (optional), month (optional),
         old_value (optional), new_value (optional)
     """
     def _get_efforts(db_path):
         conn = get_connection(db_path)
         rows = conn.execute("""
-            SELECT emp.name AS employee, p.project_code, e.year, e.month, e.percentage
+            SELECT emp.name AS employee, bl.budget_line_code, e.year, e.month, e.percentage
             FROM efforts e
             JOIN allocation_lines al ON al.id = e.allocation_line_id
             JOIN employees emp ON emp.id = al.employee_id
-            JOIN projects p ON p.id = al.project_id
+            JOIN budget_lines bl ON bl.id = al.budget_line_id
         """).fetchall()
         conn.close()
         result = {}
         for r in rows:
-            key = (r["employee"], r["project_code"], r["year"], r["month"])
+            key = (r["employee"], r["budget_line_code"], r["year"], r["month"])
             result[key] = r["percentage"]
         return result
 
     def _get_allocation_lines(db_path):
         conn = get_connection(db_path)
         rows = conn.execute("""
-            SELECT emp.name AS employee, p.project_code
+            SELECT emp.name AS employee, bl.budget_line_code
             FROM allocation_lines al
             JOIN employees emp ON emp.id = al.employee_id
-            JOIN projects p ON p.id = al.project_id
+            JOIN budget_lines bl ON bl.id = al.budget_line_id
         """).fetchall()
         conn.close()
-        # Use a counter since same employee+project can have multiple lines
+        # Use a counter since same employee+budget_line can have multiple lines
         from collections import Counter
-        return Counter((r["employee"], r["project_code"]) for r in rows)
+        return Counter((r["employee"], r["budget_line_code"]) for r in rows)
 
     changes = []
 
@@ -165,7 +165,7 @@ def diff_databases(main_db_path: str | Path, branch_db_path_: str | Path) -> lis
         old = main_efforts.get(key)
         new = branch_efforts.get(key)
         if old != new:
-            employee, project_code, year, month = key
+            employee, budget_line_code, year, month = key
             if old is None:
                 change_type = "effort_added"
             elif new is None:
@@ -175,7 +175,7 @@ def diff_databases(main_db_path: str | Path, branch_db_path_: str | Path) -> lis
             changes.append({
                 "type": change_type,
                 "employee": employee,
-                "project_code": project_code,
+                "budget_line_code": budget_line_code,
                 "year": year,
                 "month": month,
                 "old_value": old,
@@ -191,20 +191,20 @@ def diff_databases(main_db_path: str | Path, branch_db_path_: str | Path) -> lis
         main_count = main_lines.get(key, 0)
         branch_count = branch_lines.get(key, 0)
         diff = branch_count - main_count
-        employee, project_code = key
+        employee, budget_line_code = key
         if diff > 0:
             for _ in range(diff):
                 changes.append({
                     "type": "allocation_line_added",
                     "employee": employee,
-                    "project_code": project_code,
+                    "budget_line_code": budget_line_code,
                 })
         elif diff < 0:
             for _ in range(-diff):
                 changes.append({
                     "type": "allocation_line_removed",
                     "employee": employee,
-                    "project_code": project_code,
+                    "budget_line_code": budget_line_code,
                 })
 
     return changes
@@ -237,7 +237,7 @@ def merge_branch(main_db_path: str | Path, branch_name: str) -> Path | None:
         merges_dir.mkdir(exist_ok=True)
         tsv_path = merges_dir / f"merge_{branch_name}_{timestamp}.tsv"
         with open(tsv_path, "w", newline="", encoding="utf-8") as fh:
-            fh.write("type\temployee\tproject_code\tyear\tmonth\told_value\tnew_value\n")
+            fh.write("type\temployee\tbudget_line_code\tyear\tmonth\told_value\tnew_value\n")
             for c in changes:
                 ctype = c["type"]
                 year = c.get("year", "")
@@ -246,7 +246,7 @@ def merge_branch(main_db_path: str | Path, branch_name: str) -> Path | None:
                 new_val = c.get("new_value")
                 old_str = f"{old_val:.2f}" if old_val is not None else ""
                 new_str = f"{new_val:.2f}" if new_val is not None else ""
-                fh.write(f"{ctype}\t{c['employee']}\t{c['project_code']}\t{year}\t{month}\t{old_str}\t{new_str}\n")
+                fh.write(f"{ctype}\t{c['employee']}\t{c['budget_line_code']}\t{year}\t{month}\t{old_str}\t{new_str}\n")
 
     # Back up main before replacing
     backups_dir = main_db_path.parent / "backups"

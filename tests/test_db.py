@@ -19,7 +19,7 @@ def test_schema_creates_all_tables(conn):
             "SELECT name FROM sqlite_master WHERE type='table'"
         )
     }
-    assert tables == {"groups", "employees", "projects", "allocation_lines", "efforts", "_meta", "audit_log"}
+    assert tables == {"groups", "employees", "projects", "budget_lines", "allocation_lines", "efforts", "_meta", "audit_log"}
 
 
 def test_create_schema_is_idempotent(conn):
@@ -39,12 +39,18 @@ def test_insert_and_retrieve_full_chain(conn):
     conn.execute("INSERT INTO employees (name, group_id) VALUES ('Alice Smith', ?)", (group_id,))
     emp_id = conn.execute("SELECT id FROM employees WHERE name='Alice Smith'").fetchone()[0]
 
-    conn.execute("INSERT INTO projects (project_code, name) VALUES ('5120307', 'The Widget Project')")
-    proj_id = conn.execute("SELECT id FROM projects WHERE project_code='5120307'").fetchone()[0]
+    conn.execute("INSERT INTO projects (name) VALUES ('The Widget Project')")
+    proj_id = conn.execute("SELECT id FROM projects WHERE name='The Widget Project'").fetchone()[0]
 
     conn.execute(
-        "INSERT INTO allocation_lines (employee_id, project_id, fund_code, account) VALUES (?, ?, '25210', '511120')",
-        (emp_id, proj_id),
+        "INSERT INTO budget_lines (project_id, budget_line_code, name) VALUES (?, '5120307', 'The Widget Project')",
+        (proj_id,),
+    )
+    bl_id = conn.execute("SELECT id FROM budget_lines WHERE budget_line_code='5120307'").fetchone()[0]
+
+    conn.execute(
+        "INSERT INTO allocation_lines (employee_id, budget_line_id, fund_code, account) VALUES (?, ?, '25210', '511120')",
+        (emp_id, bl_id),
     )
     line_id = conn.execute("SELECT id FROM allocation_lines WHERE employee_id=?", (emp_id,)).fetchone()[0]
 
@@ -55,17 +61,17 @@ def test_insert_and_retrieve_full_chain(conn):
 
     row = conn.execute(
         """
-        SELECT e.name, p.project_code, al.fund_code, ef.year, ef.month, ef.percentage
+        SELECT e.name, bl.budget_line_code, al.fund_code, ef.year, ef.month, ef.percentage
         FROM efforts ef
         JOIN allocation_lines al ON al.id = ef.allocation_line_id
         JOIN employees e ON e.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
         WHERE ef.year = 2025 AND ef.month = 7
         """
     ).fetchone()
 
     assert row["name"] == "Alice Smith"
-    assert row["project_code"] == "5120307"
+    assert row["budget_line_code"] == "5120307"
     assert row["fund_code"] == "25210"
     assert row["percentage"] == 50.0
 
@@ -75,9 +81,13 @@ def test_effort_duplicate_rejected(conn):
     group_id = conn.execute("SELECT id FROM groups WHERE name='Ops'").fetchone()[0]
     conn.execute("INSERT INTO employees (name, group_id) VALUES ('Bob Jones', ?)", (group_id,))
     emp_id = conn.execute("SELECT id FROM employees WHERE name='Bob Jones'").fetchone()[0]
-    conn.execute("INSERT INTO projects (project_code, name) VALUES ('Non-Project', NULL)")
-    proj_id = conn.execute("SELECT id FROM projects WHERE project_code='Non-Project'").fetchone()[0]
-    conn.execute("INSERT INTO allocation_lines (employee_id, project_id) VALUES (?, ?)", (emp_id, proj_id))
+
+    conn.execute("INSERT INTO projects (name, is_nonproject) VALUES ('Non-Project', 1)")
+    proj_id = conn.execute("SELECT id FROM projects WHERE name='Non-Project'").fetchone()[0]
+    conn.execute("INSERT INTO budget_lines (project_id, budget_line_code) VALUES (?, 'Non-Project')", (proj_id,))
+    bl_id = conn.execute("SELECT id FROM budget_lines WHERE budget_line_code='Non-Project'").fetchone()[0]
+
+    conn.execute("INSERT INTO allocation_lines (employee_id, budget_line_id) VALUES (?, ?)", (emp_id, bl_id))
     line_id = conn.execute("SELECT id FROM allocation_lines WHERE employee_id=?", (emp_id,)).fetchone()[0]
 
     conn.execute("INSERT INTO efforts (allocation_line_id, year, month, percentage) VALUES (?, 2025, 8, 100.0)", (line_id,))
@@ -90,9 +100,13 @@ def test_effort_month_constraint(conn):
     group_id = conn.execute("SELECT id FROM groups WHERE name='QA'").fetchone()[0]
     conn.execute("INSERT INTO employees (name, group_id) VALUES ('Carol White', ?)", (group_id,))
     emp_id = conn.execute("SELECT id FROM employees WHERE name='Carol White'").fetchone()[0]
-    conn.execute("INSERT INTO projects (project_code, name) VALUES ('9999999', 'Test Project')")
-    proj_id = conn.execute("SELECT id FROM projects WHERE project_code='9999999'").fetchone()[0]
-    conn.execute("INSERT INTO allocation_lines (employee_id, project_id) VALUES (?, ?)", (emp_id, proj_id))
+
+    conn.execute("INSERT INTO projects (name) VALUES ('Test Project')")
+    proj_id = conn.execute("SELECT id FROM projects WHERE name='Test Project'").fetchone()[0]
+    conn.execute("INSERT INTO budget_lines (project_id, budget_line_code, name) VALUES (?, '9999999', 'Test Project')", (proj_id,))
+    bl_id = conn.execute("SELECT id FROM budget_lines WHERE budget_line_code='9999999'").fetchone()[0]
+
+    conn.execute("INSERT INTO allocation_lines (employee_id, budget_line_id) VALUES (?, ?)", (emp_id, bl_id))
     line_id = conn.execute("SELECT id FROM allocation_lines WHERE employee_id=?", (emp_id,)).fetchone()[0]
 
     with pytest.raises(sqlite3.IntegrityError):

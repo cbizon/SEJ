@@ -49,8 +49,8 @@ def main_db(tmp_path):
         ["", "Engineering", "25210", "49000", "511120",
          "", "", "", "", "5120002", "Gadget Project",
          "50.00%", "40.00%"],
-        ["Jones,Bob", "Ops", "20152", "12001", "512120",
-         "", "", "", "VROPS", "N/A", "N/A",
+        ["Jones,Bob", "Ops", "", "", "",
+         "", "", "", "", "N/A", "N/A",
          "100.00%", "100.00%"],
     ])
     load_tsv(tsv, db)
@@ -162,8 +162,8 @@ def test_diff_detects_changed_value(main_db):
         WHERE allocation_line_id = (
             SELECT al.id FROM allocation_lines al
             JOIN employees e ON e.id = al.employee_id
-            JOIN projects p ON p.id = al.project_id
-            WHERE e.name = 'Smith,Jane' AND p.project_code = '5120001'
+            JOIN budget_lines bl ON bl.id = al.budget_line_id
+            WHERE e.name = 'Smith,Jane' AND bl.budget_line_code = '5120001'
         ) AND year = 2025 AND month = 7
     """)
     conn.commit()
@@ -184,8 +184,8 @@ def test_diff_detects_added_effort(main_db):
     line_id = conn.execute("""
         SELECT al.id FROM allocation_lines al
         JOIN employees e ON e.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE e.name = 'Smith,Jane' AND p.project_code = '5120001'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE e.name = 'Smith,Jane' AND bl.budget_line_code = '5120001'
     """).fetchone()[0]
     conn.execute(
         "INSERT INTO efforts (allocation_line_id, year, month, percentage) VALUES (?, 2025, 9, 30.0)",
@@ -209,8 +209,9 @@ def test_diff_detects_removed_effort(main_db):
         WHERE allocation_line_id = (
             SELECT al.id FROM allocation_lines al
             JOIN employees e ON e.id = al.employee_id
-            JOIN projects p ON p.id = al.project_id
-            WHERE e.name = 'Jones,Bob' AND p.project_code = 'Non-Project'
+            JOIN budget_lines bl ON bl.id = al.budget_line_id
+            JOIN projects p ON p.id = bl.project_id
+                WHERE e.name = 'Jones,Bob' AND p.is_nonproject = 1
         ) AND year = 2025 AND month = 7
     """)
     conn.commit()
@@ -227,8 +228,8 @@ def test_diff_detects_added_allocation_line(main_db):
     dest = create_branch(main_db, "new_line")
     conn = get_connection(dest)
     emp_id = conn.execute("SELECT id FROM employees WHERE name = 'Smith,Jane'").fetchone()[0]
-    proj_id = conn.execute("SELECT id FROM projects WHERE project_code = '5120001'").fetchone()[0]
-    conn.execute("INSERT INTO allocation_lines (employee_id, project_id) VALUES (?, ?)", (emp_id, proj_id))
+    bl_id = conn.execute("SELECT id FROM budget_lines WHERE budget_line_code = '5120001'").fetchone()[0]
+    conn.execute("INSERT INTO allocation_lines (employee_id, budget_line_id) VALUES (?, ?)", (emp_id, bl_id))
     conn.commit()
     conn.close()
 
@@ -236,7 +237,7 @@ def test_diff_detects_added_allocation_line(main_db):
     line_adds = [c for c in changes if c["type"] == "allocation_line_added"]
     assert len(line_adds) == 1
     assert line_adds[0]["employee"] == "Smith,Jane"
-    assert line_adds[0]["project_code"] == "5120001"
+    assert line_adds[0]["budget_line_code"] == "5120001"
 
 
 def test_merge_produces_tsv(main_db):
@@ -247,8 +248,8 @@ def test_merge_produces_tsv(main_db):
         WHERE allocation_line_id = (
             SELECT al.id FROM allocation_lines al
             JOIN employees e ON e.id = al.employee_id
-            JOIN projects p ON p.id = al.project_id
-            WHERE e.name = 'Smith,Jane' AND p.project_code = '5120001'
+            JOIN budget_lines bl ON bl.id = al.budget_line_id
+            WHERE e.name = 'Smith,Jane' AND bl.budget_line_code = '5120001'
         ) AND year = 2025 AND month = 7
     """)
     conn.commit()
@@ -276,8 +277,9 @@ def test_merge_replaces_main(main_db):
         WHERE allocation_line_id = (
             SELECT al.id FROM allocation_lines al
             JOIN employees e ON e.id = al.employee_id
-            JOIN projects p ON p.id = al.project_id
-            WHERE e.name = 'Jones,Bob' AND p.project_code = 'Non-Project'
+            JOIN budget_lines bl ON bl.id = al.budget_line_id
+            JOIN projects p ON p.id = bl.project_id
+                WHERE e.name = 'Jones,Bob' AND p.is_nonproject = 1
         ) AND year = 2025 AND month = 7
     """)
     conn.commit()
@@ -294,8 +296,8 @@ def test_merge_replaces_main(main_db):
         SELECT e.percentage FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE emp.name = 'Jones,Bob' AND p.project_code = 'Non-Project'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE emp.name = 'Jones,Bob' AND bl.budget_line_code = 'Non-Project'
         AND e.year = 2025 AND e.month = 7
     """).fetchone()
     assert row["percentage"] == 99.0
@@ -368,8 +370,8 @@ def test_merge_backup_has_original_data(main_db):
         SELECT e.percentage FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE emp.name = 'Smith,Jane' AND p.project_code = '5120001'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE emp.name = 'Smith,Jane' AND bl.budget_line_code = '5120001'
         AND e.year = 2025 AND e.month = 7
     """).fetchone()["percentage"]
     conn.close()
@@ -382,8 +384,8 @@ def test_merge_backup_has_original_data(main_db):
         WHERE allocation_line_id = (
             SELECT al.id FROM allocation_lines al
             JOIN employees e ON e.id = al.employee_id
-            JOIN projects p ON p.id = al.project_id
-            WHERE e.name = 'Smith,Jane' AND p.project_code = '5120001'
+            JOIN budget_lines bl ON bl.id = al.budget_line_id
+            WHERE e.name = 'Smith,Jane' AND bl.budget_line_code = '5120001'
         ) AND year = 2025 AND month = 7
     """)
     conn.commit()
@@ -397,8 +399,8 @@ def test_merge_backup_has_original_data(main_db):
         SELECT e.percentage FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE emp.name = 'Smith,Jane' AND p.project_code = '5120001'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE emp.name = 'Smith,Jane' AND bl.budget_line_code = '5120001'
         AND e.year = 2025 AND e.month = 7
     """).fetchone()["percentage"]
     backup_conn.close()
@@ -414,8 +416,9 @@ def test_revert_to_latest(main_db):
         WHERE allocation_line_id = (
             SELECT al.id FROM allocation_lines al
             JOIN employees e ON e.id = al.employee_id
-            JOIN projects p ON p.id = al.project_id
-            WHERE e.name = 'Jones,Bob' AND p.project_code = 'Non-Project'
+            JOIN budget_lines bl ON bl.id = al.budget_line_id
+            JOIN projects p ON p.id = bl.project_id
+                WHERE e.name = 'Jones,Bob' AND p.is_nonproject = 1
         ) AND year = 2025 AND month = 7
     """)
     conn.commit()
@@ -428,8 +431,8 @@ def test_revert_to_latest(main_db):
         SELECT e.percentage FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE emp.name = 'Jones,Bob' AND p.project_code = 'Non-Project'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE emp.name = 'Jones,Bob' AND bl.budget_line_code = 'Non-Project'
         AND e.year = 2025 AND e.month = 7
     """).fetchone()["percentage"]
     conn.close()
@@ -444,8 +447,8 @@ def test_revert_to_latest(main_db):
         SELECT e.percentage FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE emp.name = 'Jones,Bob' AND p.project_code = 'Non-Project'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE emp.name = 'Jones,Bob' AND bl.budget_line_code = 'Non-Project'
         AND e.year = 2025 AND e.month = 7
     """).fetchone()["percentage"]
     conn.close()
@@ -461,8 +464,9 @@ def test_revert_to_specific_backup(main_db):
         WHERE allocation_line_id = (
             SELECT al.id FROM allocation_lines al
             JOIN employees e ON e.id = al.employee_id
-            JOIN projects p ON p.id = al.project_id
-            WHERE e.name = 'Jones,Bob' AND p.project_code = 'Non-Project'
+            JOIN budget_lines bl ON bl.id = al.budget_line_id
+            JOIN projects p ON p.id = bl.project_id
+                WHERE e.name = 'Jones,Bob' AND p.is_nonproject = 1
         ) AND year = 2025 AND month = 7
     """)
     conn.commit()
@@ -476,8 +480,9 @@ def test_revert_to_specific_backup(main_db):
         WHERE allocation_line_id = (
             SELECT al.id FROM allocation_lines al
             JOIN employees e ON e.id = al.employee_id
-            JOIN projects p ON p.id = al.project_id
-            WHERE e.name = 'Jones,Bob' AND p.project_code = 'Non-Project'
+            JOIN budget_lines bl ON bl.id = al.budget_line_id
+            JOIN projects p ON p.id = bl.project_id
+                WHERE e.name = 'Jones,Bob' AND p.is_nonproject = 1
         ) AND year = 2025 AND month = 7
     """)
     conn.commit()
@@ -495,8 +500,8 @@ def test_revert_to_specific_backup(main_db):
         SELECT e.percentage FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE emp.name = 'Jones,Bob' AND p.project_code = 'Non-Project'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE emp.name = 'Jones,Bob' AND bl.budget_line_code = 'Non-Project'
         AND e.year = 2025 AND e.month = 7
     """).fetchone()["percentage"]
     conn.close()
