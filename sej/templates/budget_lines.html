@@ -244,19 +244,19 @@
 
         Promise.all([
             fetch("/api/budget-lines").then(r => r.json()),
-            fetch("/api/branch").then(r => r.json()),
+            fetch("/api/change-set").then(r => r.json()),
             fetch("/api/projects").then(r => r.json()),
             fetch("/api/employees").then(r => r.json()),
             fetch("/api/groups").then(r => r.json()),
-        ]).then(([budgetLines, branchInfo, projects, employees, groups]) => {
+        ]).then(([budgetLines, changeSetInfo, projects, employees, groups]) => {
             projectsList = projects;
             projects.forEach(p => { projectMap[p.id] = p; });
 
-            editable = branchInfo.db_role === "branch";
+            editable = changeSetInfo.status === "open";
 
-            if (editable && branchInfo.branch_name) {
+            if (editable && changeSetInfo.name) {
                 const banner = document.getElementById("branch-banner");
-                banner.textContent = "Editing branch: " + branchInfo.branch_name;
+                banner.textContent = "Editing session: " + changeSetInfo.name;
                 banner.style.display = "block";
                 document.getElementById("add-budget-line-btn").style.display = "";
                 document.getElementById("add-group-btn").style.display = "";
@@ -689,7 +689,7 @@
 
             // Edit / Save / Discard handlers
             document.getElementById("edit-data-btn").addEventListener("click", function() {
-                fetch("/api/branch/create", {method: "POST"})
+                fetch("/api/change-set/create", {method: "POST"})
                     .then(r => {
                         if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
                         return r.json();
@@ -698,7 +698,7 @@
             });
 
             document.getElementById("save-btn").addEventListener("click", function() {
-                fetch("/api/branch/merge", {method: "POST"})
+                fetch("/api/change-set/merge", {method: "POST"})
                     .then(r => {
                         if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
                         return r.json();
@@ -708,7 +708,7 @@
 
             document.getElementById("discard-btn").addEventListener("click", function() {
                 if (!confirm("Discard all changes? This cannot be undone.")) return;
-                fetch("/api/branch/discard", {method: "POST"})
+                fetch("/api/change-set/discard", {method: "POST"})
                     .then(r => {
                         if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
                         return r.json();
