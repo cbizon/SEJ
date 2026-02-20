@@ -73,16 +73,6 @@
         }
         #selection-toolbar .count { font-size: 0.9em; color: #666; }
         /* Add-row modal */
-        #add-project-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.4);
-            z-index: 300;
-            justify-content: center;
-            align-items: center;
-        }
-        #add-project-overlay.open { display: flex; }
         #add-row-overlay {
             display: none;
             position: fixed;
@@ -103,16 +93,6 @@
             align-items: center;
         }
         #add-employee-overlay.open { display: flex; }
-        #add-group-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.4);
-            z-index: 300;
-            justify-content: center;
-            align-items: center;
-        }
-        #add-group-overlay.open { display: flex; }
         #add-row-form {
             background: #fff;
             padding: 20px;
@@ -128,7 +108,8 @@
 <body>
     <h1>Effort Allocations</h1>
     <nav style="margin-bottom:0.5rem">
-        <a href="/reports" style="text-decoration:none;color:#0d6efd;font-size:0.9em">Reports</a>
+        <a href="/budget-lines" style="text-decoration:none;color:#0d6efd;font-size:0.9em">Budget Lines</a>
+        <a href="/reports" style="text-decoration:none;color:#0d6efd;font-size:0.9em;margin-left:1rem">Reports</a>
     </nav>
     <div id="branch-banner"></div>
     <div id="toolbar">
@@ -137,14 +118,13 @@
             <div id="col-dropdown"></div>
         </div>
         <button id="show-all-btn">Show all rows</button>
+        <button id="view-toggle-btn">Show projects view</button>
         <button id="export-btn">Export TSV</button>
         <button id="edit-data-btn" style="display:none">Edit data</button>
         <button id="select-mode-btn" style="display:none">Selection mode</button>
         <button id="fix-totals-btn" style="display:none">Fix totals</button>
         <button id="add-employee-btn" style="display:none">Add employee</button>
         <button id="add-row-btn" style="display:none">Add allocation line</button>
-        <button id="add-project-btn" style="display:none">Add/Edit project</button>
-        <button id="add-group-btn" style="display:none">Add group</button>
         <button id="save-btn" style="display:none">Save changes</button>
         <button id="discard-btn" style="display:none">Discard changes</button>
     </div>
@@ -163,9 +143,9 @@
             <label>Employee</label>
             <input id="ar-employee" list="ar-employee-list" placeholder="Type to search">
             <datalist id="ar-employee-list"></datalist>
-            <label>Project Code</label>
-            <input id="ar-project-code" list="ar-project-list" placeholder="Type or select">
-            <datalist id="ar-project-list"></datalist>
+            <label>Budget Line Code</label>
+            <input id="ar-budget-line-code" list="ar-budget-line-list" placeholder="Type or select">
+            <datalist id="ar-budget-line-list"></datalist>
             <div class="btn-row">
                 <button id="ar-cancel">Cancel</button>
                 <button id="ar-submit">Add</button>
@@ -189,79 +169,6 @@
             <div class="btn-row">
                 <button id="ae-cancel">Cancel</button>
                 <button id="ae-submit">Add</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="add-project-overlay">
-        <div id="add-row-form">
-            <h3 id="ap-title" style="margin-top:0">Add Project</h3>
-            <label>Edit existing project <span style="font-weight:normal;font-size:0.9em">(leave blank to add new)</span></label>
-            <input id="ap-select" list="ap-select-list" autocomplete="off" placeholder="Type or select existing project">
-            <datalist id="ap-select-list"></datalist>
-            <div id="ap-name-row">
-                <label>Project Name</label>
-                <input id="ap-name" placeholder="Enter project name">
-            </div>
-            <label>Start <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
-            <div style="display:flex;gap:8px">
-                <select id="ap-start-month" style="flex:1">
-                    <option value="">Month</option>
-                    <option value="1">Jan</option><option value="2">Feb</option>
-                    <option value="3">Mar</option><option value="4">Apr</option>
-                    <option value="5">May</option><option value="6">Jun</option>
-                    <option value="7">Jul</option><option value="8">Aug</option>
-                    <option value="9">Sep</option><option value="10">Oct</option>
-                    <option value="11">Nov</option><option value="12">Dec</option>
-                </select>
-                <input id="ap-start-year" type="number" placeholder="Year" style="width:80px">
-            </div>
-            <label>End <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
-            <div style="display:flex;gap:8px">
-                <select id="ap-end-month" style="flex:1">
-                    <option value="">Month</option>
-                    <option value="1">Jan</option><option value="2">Feb</option>
-                    <option value="3">Mar</option><option value="4">Apr</option>
-                    <option value="5">May</option><option value="6">Jun</option>
-                    <option value="7">Jul</option><option value="8">Aug</option>
-                    <option value="9">Sep</option><option value="10">Oct</option>
-                    <option value="11">Nov</option><option value="12">Dec</option>
-                </select>
-                <input id="ap-end-year" type="number" placeholder="Year" style="width:80px">
-            </div>
-            <label>Local PI <span style="font-weight:normal;font-size:0.9em">(optional, internal employees only)</span></label>
-            <input id="ap-pi" list="ap-pi-list" autocomplete="off" placeholder="Type to search">
-            <datalist id="ap-pi-list"></datalist>
-            <label>Administrative Group <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
-            <select id="ap-admin-group">
-                <option value="">— None —</option>
-            </select>
-            <label>Personnel Budget <span style="font-weight:normal;font-size:0.9em">(optional)</span></label>
-            <input id="ap-budget" type="number" placeholder="e.g. 500000" step="any" min="0">
-            <div class="btn-row">
-                <button id="ap-cancel">Cancel</button>
-                <button id="ap-submit">Add</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="add-group-overlay">
-        <div id="add-row-form">
-            <h3 style="margin-top:0">Add Group</h3>
-            <label>Group Name</label>
-            <input id="ag-name" placeholder="Enter group name">
-            <label>Type</label>
-            <div style="margin-top:6px;display:flex;gap:16px;">
-                <label style="font-weight:normal;display:flex;align-items:center;gap:4px;">
-                    <input type="radio" name="ag-type" id="ag-internal" value="internal" checked> Internal
-                </label>
-                <label style="font-weight:normal;display:flex;align-items:center;gap:4px;">
-                    <input type="radio" name="ag-type" id="ag-external" value="external"> External
-                </label>
-            </div>
-            <div class="btn-row">
-                <button id="ag-cancel">Cancel</button>
-                <button id="ag-submit">Add</button>
             </div>
         </div>
     </div>
@@ -297,6 +204,8 @@
         let selectedCells = new Set(); // Set of "lineId|field" strings
         let selectedElements = new Map(); // "lineId|field" -> DOM element
         let isDragging = false;
+        let projectsView = false; // Toggle between lines view and projects view
+        let originalData = []; // Store original data for toggling back
 
         function applyRowFilter(table) {
             if (showAllRows) {
@@ -349,10 +258,50 @@
             updateSelectionToolbar();
         }
 
+        function rollUpToProjects(data, monthFields) {
+            // Group by Employee, Group, and Project, summing effort across budget lines
+            const grouped = {};
+            data.forEach(row => {
+                const project = row["Project"] || "(No Project)";
+                const key = `${row["Employee"]}|${row["Group"]}|${project}`;
+                if (!grouped[key]) {
+                    grouped[key] = {
+                        "Employee": row["Employee"],
+                        "Group": row["Group"],
+                        "Project": project,
+                    };
+                    // Initialize month fields
+                    monthFields.forEach(mf => {
+                        grouped[key][mf] = 0;
+                    });
+                }
+                // Sum the effort percentages
+                monthFields.forEach(mf => {
+                    const val = row[mf];
+                    if (val !== "" && val != null) {
+                        const pct = parseFloat(String(val).replace("%", ""));
+                        if (!isNaN(pct)) {
+                            grouped[key][mf] += pct;
+                        }
+                    }
+                });
+            });
+
+            // Convert back to array and format percentages
+            return Object.values(grouped).map(row => {
+                monthFields.forEach(mf => {
+                    const val = row[mf];
+                    row[mf] = val > 0 ? `${val.toFixed(2)}%` : "";
+                });
+                return row;
+            });
+        }
+
         Promise.all([
             fetch("/api/data").then(r => r.json()),
             fetch("/api/groups").then(r => r.json()),
         ]).then(([{columns, data, editable, branch_name}, groupsList]) => {
+                originalData = data; // Store for toggling
                 const externalGroups = new Set(
                     groupsList.filter(g => !g.is_internal).map(g => g.name)
                 );
@@ -365,8 +314,6 @@
                     document.getElementById("fix-totals-btn").style.display = "";
                     document.getElementById("add-employee-btn").style.display = "";
                     document.getElementById("add-row-btn").style.display = "";
-                    document.getElementById("add-project-btn").style.display = "";
-                    document.getElementById("add-group-btn").style.display = "";
                     document.getElementById("save-btn").style.display = "";
                     document.getElementById("discard-btn").style.display = "";
                 } else {
@@ -486,7 +433,7 @@
                 table.on("dataSorted", scheduleBorders);
 
                 table.on("cellEditing", (cell) => {
-                    if (selectMode) cell.cancelEdit();
+                    if (selectMode || projectsView) cell.cancelEdit();
                 });
 
                 const btn = document.getElementById("col-btn");
@@ -573,6 +520,86 @@
                 showAllBtn.addEventListener("click", () => {
                     showAllRows = !showAllRows;
                     showAllBtn.classList.toggle("active", showAllRows);
+                    applyRowFilter(table);
+                });
+
+                document.getElementById("view-toggle-btn").addEventListener("click", () => {
+                    projectsView = !projectsView;
+                    const btn = document.getElementById("view-toggle-btn");
+
+                    // If in selection mode, turn it off
+                    if (selectMode) {
+                        selectMode = false;
+                        selectModeBtn.classList.remove("active");
+                        clearSelection();
+                    }
+
+                    if (projectsView) {
+                        btn.textContent = "Show lines view";
+                        // Roll up data by projects
+                        const rolledUpData = rollUpToProjects(originalData, monthFields);
+                        table.replaceData(rolledUpData);
+
+                        // Hide budget line columns
+                        const columnsToHide = [
+                            "Budget Line Code", "Budget Line Name",
+                            "Fund Code", "Source", "Account",
+                            "Cost Code 1", "Cost Code 2", "Cost Code 3", "Program Code"
+                        ];
+                        table.getColumns().forEach(col => {
+                            if (columnsToHide.includes(col.getDefinition().title)) {
+                                col.hide();
+                            }
+                        });
+
+                        // Disable editing features in projects view
+                        if (editable) {
+                            selectModeBtn.disabled = true;
+                            selectModeBtn.style.opacity = "0.5";
+                        }
+                    } else {
+                        btn.textContent = "Show projects view";
+                        // Restore original data
+                        table.replaceData(originalData);
+
+                        // Restore column visibility based on hiddenByDefault
+                        const columnsToShow = [
+                            "Budget Line Code", "Budget Line Name"
+                        ];
+                        table.getColumns().forEach(col => {
+                            const title = col.getDefinition().title;
+                            if (columnsToShow.includes(title)) {
+                                col.show();
+                            }
+                            // Other columns stay hidden if they were in hiddenByDefault
+                        });
+
+                        // Re-enable editing features
+                        if (editable) {
+                            selectModeBtn.disabled = false;
+                            selectModeBtn.style.opacity = "1";
+                        }
+                    }
+
+                    // Recompute violations and reapply filters
+                    violations = computeViolations(table.getData(), monthFields, externalGroups);
+                    // Clear all backgrounds first
+                    table.getRows().forEach(row => {
+                        monthFields.forEach(mf => {
+                            const c = row.getCell(mf);
+                            if (c) c.getElement().style.backgroundColor = "";
+                        });
+                    });
+                    // Reapply violation highlighting
+                    table.getRows().forEach(row => {
+                        const emp = row.getData()["Employee"];
+                        monthFields.forEach(mf => {
+                            if (violations.has(`${emp}|${mf}`)) {
+                                const c = row.getCell(mf);
+                                if (c) c.getElement().style.backgroundColor = "#ffcccc";
+                            }
+                        });
+                    });
                     applyRowFilter(table);
                 });
 
@@ -754,14 +781,14 @@
                         });
                     });
 
-                    // Load projects for autocomplete
-                    fetch("/api/projects").then(r => r.json()).then(projects => {
-                        const dl = document.getElementById("ar-project-list");
+                    // Load budget lines for autocomplete
+                    fetch("/api/budget-lines").then(r => r.json()).then(budgetLines => {
+                        const dl = document.getElementById("ar-budget-line-list");
                         dl.innerHTML = "";
-                        projects.forEach(p => {
+                        budgetLines.forEach(bl => {
                             const opt = document.createElement("option");
-                            opt.value = p.project_code;
-                            opt.textContent = p.name ? `${p.project_code} - ${p.name}` : p.project_code;
+                            opt.value = bl.budget_line_code;
+                            opt.textContent = bl.name ? `${bl.budget_line_code} - ${bl.name}` : bl.budget_line_code;
                             dl.appendChild(opt);
                         });
                     });
@@ -773,9 +800,9 @@
 
                 document.getElementById("ar-submit").addEventListener("click", () => {
                     const employee = document.getElementById("ar-employee").value;
-                    const code = document.getElementById("ar-project-code").value.trim();
+                    const code = document.getElementById("ar-budget-line-code").value.trim();
                     if (!employee || !code) {
-                        alert("Employee and project code are required.");
+                        alert("Employee and budget line code are required.");
                         return;
                     }
                     fetch("/api/allocation_line", {
@@ -783,7 +810,7 @@
                         headers: {"Content-Type": "application/json"},
                         body: JSON.stringify({
                             employee_name: employee,
-                            project_code: code,
+                            budget_line_code: code,
                         }),
                     })
                     .then(r => {
@@ -815,195 +842,6 @@
                                     break;
                                 }
                             }
-                        });
-                    });
-                });
-
-                // Add/Edit project
-                let apProjectsData = [];
-                let apPiMap = {};  // employee name → id, for internal employees
-
-                function apSetMode(isEdit) {
-                    document.getElementById("ap-title").textContent = isEdit ? "Edit Project" : "Add Project";
-                    document.getElementById("ap-submit").textContent = isEdit ? "Update" : "Add";
-                    document.getElementById("ap-name-row").style.display = isEdit ? "none" : "";
-                }
-
-                function apClearFields() {
-                    document.getElementById("ap-name").value = "";
-                    document.getElementById("ap-start-month").value = "";
-                    document.getElementById("ap-start-year").value = "";
-                    document.getElementById("ap-end-month").value = "";
-                    document.getElementById("ap-end-year").value = "";
-                    document.getElementById("ap-pi").value = "";
-                    document.getElementById("ap-budget").value = "";
-                    document.getElementById("ap-admin-group").value = "";
-                }
-
-                function apPopulateFromProject(proj) {
-                    document.getElementById("ap-start-month").value = proj.start_month || "";
-                    document.getElementById("ap-start-year").value = proj.start_year || "";
-                    document.getElementById("ap-end-month").value = proj.end_month || "";
-                    document.getElementById("ap-end-year").value = proj.end_year || "";
-                    document.getElementById("ap-pi").value = proj.local_pi_name || "";
-                    document.getElementById("ap-budget").value = proj.personnel_budget != null ? proj.personnel_budget : "";
-                    document.getElementById("ap-admin-group").value = proj.admin_group_id || "";
-                }
-
-                function apCodeFromInput() {
-                    return document.getElementById("ap-select").value.trim().split(" \u2014 ")[0].trim();
-                }
-
-                document.getElementById("ap-select").addEventListener("input", () => {
-                    const val = document.getElementById("ap-select").value.trim();
-                    const proj = apProjectsData.find(p => p.project_code === apCodeFromInput());
-                    if (proj) {
-                        apPopulateFromProject(proj);
-                        apSetMode(true);
-                    } else if (!val) {
-                        apClearFields();
-                        apSetMode(false);
-                    }
-                });
-
-                document.getElementById("add-project-btn").addEventListener("click", () => {
-                    document.getElementById("ap-select").value = "";
-                    apClearFields();
-                    apSetMode(false);
-
-                    Promise.all([
-                        fetch("/api/projects").then(r => r.json()),
-                        fetch("/api/employees").then(r => r.json()),
-                        fetch("/api/groups").then(r => r.json()),
-                    ]).then(([projects, employees, groups]) => {
-                        apProjectsData = projects;
-
-                        // Populate project datalist — value includes code and name
-                        const dl = document.getElementById("ap-select-list");
-                        dl.innerHTML = "";
-                        projects.forEach(p => {
-                            const opt = document.createElement("option");
-                            opt.value = p.name ? p.project_code + " \u2014 " + p.name : p.project_code;
-                            dl.appendChild(opt);
-                        });
-
-                        // Populate Local PI datalist — internal employees only
-                        apPiMap = {};
-                        const piDl = document.getElementById("ap-pi-list");
-                        piDl.innerHTML = "";
-                        employees.filter(e => e.is_internal).forEach(e => {
-                            const opt = document.createElement("option");
-                            opt.value = e.name;
-                            piDl.appendChild(opt);
-                            apPiMap[e.name] = e.id;
-                        });
-
-                        // Populate admin group selector — all groups
-                        const agSel = document.getElementById("ap-admin-group");
-                        agSel.innerHTML = '<option value="">— None —</option>';
-                        groups.forEach(g => {
-                            const opt = document.createElement("option");
-                            opt.value = g.id;
-                            opt.textContent = g.name + (g.is_internal ? "" : " (external)");
-                            agSel.appendChild(opt);
-                        });
-                        agSel.value = "";
-
-                        document.getElementById("add-project-overlay").classList.add("open");
-                    });
-                });
-
-                document.getElementById("ap-cancel").addEventListener("click", () => {
-                    document.getElementById("add-project-overlay").classList.remove("open");
-                });
-
-                document.getElementById("ap-submit").addEventListener("click", () => {
-                    const selectedCode = apCodeFromInput();
-                    const isEdit = !!apProjectsData.find(p => p.project_code === selectedCode);
-                    const name = document.getElementById("ap-name").value.trim();
-                    const startMonth = document.getElementById("ap-start-month").value;
-                    const startYear = document.getElementById("ap-start-year").value;
-                    const endMonth = document.getElementById("ap-end-month").value;
-                    const endYear = document.getElementById("ap-end-year").value;
-                    const piName = document.getElementById("ap-pi").value.trim();
-                    const budget = document.getElementById("ap-budget").value;
-                    const adminGroupId = document.getElementById("ap-admin-group").value;
-
-                    if (!isEdit && !name) {
-                        alert("Project name is required for a new project.");
-                        return;
-                    }
-
-                    const payload = {
-                        name: name || undefined,
-                        start_month: startMonth ? parseInt(startMonth) : null,
-                        start_year: startYear ? parseInt(startYear) : null,
-                        end_month: endMonth ? parseInt(endMonth) : null,
-                        end_year: endYear ? parseInt(endYear) : null,
-                        local_pi_id: piName ? (apPiMap[piName] || null) : null,
-                        personnel_budget: budget !== "" ? parseFloat(budget) : null,
-                        admin_group_id: adminGroupId ? parseInt(adminGroupId) : null,
-                    };
-
-                    if (isEdit) payload.project_code = selectedCode;
-
-                    fetch("/api/project", {
-                        method: isEdit ? "PUT" : "POST",
-                        headers: {"Content-Type": "application/json"},
-                        body: JSON.stringify(payload),
-                    })
-                    .then(r => {
-                        if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
-                        return r.json();
-                    })
-                    .then(result => {
-                        document.getElementById("add-project-overlay").classList.remove("open");
-                        if (!isEdit) alert(`Project created with code: ${result.project_code}`);
-                    });
-                });
-
-                // Add group
-                document.getElementById("add-group-btn").addEventListener("click", () => {
-                    document.getElementById("ag-name").value = "";
-                    document.getElementById("ag-internal").checked = true;
-                    document.getElementById("add-group-overlay").classList.add("open");
-                });
-
-                document.getElementById("ag-cancel").addEventListener("click", () => {
-                    document.getElementById("add-group-overlay").classList.remove("open");
-                });
-
-                document.getElementById("ag-submit").addEventListener("click", () => {
-                    const name = document.getElementById("ag-name").value.trim();
-                    if (!name) {
-                        alert("Group name is required.");
-                        return;
-                    }
-                    const isInternal = document.getElementById("ag-internal").checked;
-                    fetch("/api/group", {
-                        method: "POST",
-                        headers: {"Content-Type": "application/json"},
-                        body: JSON.stringify({ name, is_internal: isInternal }),
-                    })
-                    .then(r => {
-                        if (!r.ok) return r.json().then(d => { alert("Error: " + d.error); throw new Error(); });
-                        return r.json();
-                    })
-                    .then(() => {
-                        document.getElementById("add-group-overlay").classList.remove("open");
-                        return fetch("/api/groups").then(r => r.json());
-                    })
-                    .then(groupsList => {
-                        externalGroups.clear();
-                        groupsList.filter(g => !g.is_internal).forEach(g => externalGroups.add(g.name));
-                        violations = computeViolations(table.getData(), monthFields, externalGroups);
-                        table.getRows().forEach(row => {
-                            const emp = row.getData()["Employee"];
-                            monthFields.forEach(mf => {
-                                const c = row.getCell(mf);
-                                if (c) c.getElement().style.backgroundColor =
-                                    violations.has(`${emp}|${mf}`) ? "#ffcccc" : "";
-                            });
                         });
                     });
                 });

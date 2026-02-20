@@ -41,6 +41,7 @@ def _clear_data(conn) -> None:
     conn.execute("DELETE FROM efforts")
     conn.execute("DELETE FROM allocation_lines")
     conn.execute("DELETE FROM employees")
+    conn.execute("DELETE FROM budget_lines")
     conn.execute("DELETE FROM projects")
     conn.execute("DELETE FROM groups")
 
@@ -79,13 +80,26 @@ def load_tsv(tsv_path: str | Path, db_path: str | Path) -> None:
         ).fetchall()
     }
 
+    # Save budget line display names before clearing so they can be restored after reload
+    saved_display_names = {
+        r["budget_line_code"]: r["display_name"]
+        for r in conn.execute(
+            "SELECT budget_line_code, display_name FROM budget_lines WHERE display_name IS NOT NULL"
+        ).fetchall()
+    }
+
     _clear_data(conn)
 
-    # Pre-populate the Non-Project sentinel so every allocation line can
-    # reference a project row regardless of whether a project ID was supplied.
-    conn.execute(
-        "INSERT INTO projects (project_code, name) VALUES (?, NULL)",
+    # Pre-populate the Non-Project sentinel as both a project and a budget line
+    cur = conn.execute(
+        "INSERT INTO projects (name, is_nonproject) VALUES (?, 1)",
         (NON_PROJECT_CODE,),
+    )
+    np_project_id = cur.lastrowid
+    np_display_name = saved_display_names.get(NON_PROJECT_CODE, NON_PROJECT_CODE)
+    conn.execute(
+        "INSERT INTO budget_lines (project_id, budget_line_code, display_name) VALUES (?, ?, ?)",
+        (np_project_id, NON_PROJECT_CODE, np_display_name),
     )
 
     with open(tsv_path, newline="", encoding="utf-8") as fh:
@@ -124,44 +138,85 @@ def load_tsv(tsv_path: str | Path, db_path: str | Path) -> None:
                     f"Data row has no employee context: {dict(row)}"
                 )
 
-            # Resolve project
-            project_code = row["Project Id"].strip()
-            if not project_code or "N/A" in project_code:
-                project_code = NON_PROJECT_CODE
+            # Resolve budget line (TSV columns are still "Project Id" / "Project Name")
+            budget_line_code = row["Project Id"].strip()
+            is_imputed = False
+            if not budget_line_code or "N/A" in budget_line_code:
+                # Construct imputed code from accounting fields
+                fields = [
+                    row["Fund Code"].strip(),
+                    row["Source"].strip(),
+                    row["Account"].strip(),
+                    row["Cost Code 1"].strip(),
+                    row["Cost Code 2"].strip(),
+                    row["Cost Code 3"].strip(),
+                    row["Program Code"].strip(),
+                ]
+                # If all accounting fields are empty, fall back to the Non-Project sentinel
+                if all(not f for f in fields):
+                    budget_line_code = NON_PROJECT_CODE
+                else:
+                    budget_line_code = "I:" + ":".join(fields)
+                    is_imputed = True
 
-            raw_project_name = row["Project Name"].strip()
-            project_name = NON_PROJECT_CODE if not raw_project_name or "N/A" in raw_project_name else raw_project_name
+            raw_bl_name = row["Project Name"].strip()
+            if is_imputed:
+                bl_name = budget_line_code
+            else:
+                bl_name = raw_bl_name if raw_bl_name and "N/A" not in raw_bl_name else None
+
             existing = conn.execute(
-                "SELECT id, name FROM projects WHERE project_code = ?",
-                (project_code,),
+                "SELECT id, name FROM budget_lines WHERE budget_line_code = ?",
+                (budget_line_code,),
             ).fetchone()
 
             if existing:
-                project_id = existing["id"]
-                # Fill in name if we now have one and didn't before
-                if project_name and not existing["name"]:
+                budget_line_id = existing["id"]
+                # Always refresh the finance name from the TSV
+                if bl_name and not is_imputed:
                     conn.execute(
-                        "UPDATE projects SET name = ? WHERE id = ?",
-                        (project_name, project_id),
+                        "UPDATE budget_lines SET name = ? WHERE id = ?",
+                        (bl_name, budget_line_id),
                     )
             else:
+                if is_imputed:
+                    # Imputed budget lines always belong to the Non-Project project
+                    project_id = np_project_id
+                else:
+                    # Reuse an existing project with the same name, or create a new one
+                    proj_name = bl_name or budget_line_code
+                    existing_proj = conn.execute(
+                        "SELECT id FROM projects WHERE name = ? AND is_nonproject = 0",
+                        (proj_name,),
+                    ).fetchone()
+                    if existing_proj:
+                        project_id = existing_proj["id"]
+                    else:
+                        cur = conn.execute(
+                            "INSERT INTO projects (name) VALUES (?)",
+                            (proj_name,),
+                        )
+                        project_id = cur.lastrowid
+                # Use saved display_name if available, otherwise initialize from finance name
+                saved_dn = saved_display_names.get(budget_line_code, bl_name or budget_line_code)
                 cur = conn.execute(
-                    "INSERT INTO projects (project_code, name) VALUES (?, ?)",
-                    (project_code, project_name),
+                    "INSERT INTO budget_lines (project_id, budget_line_code, name, display_name)"
+                    " VALUES (?, ?, ?, ?)",
+                    (project_id, budget_line_code, bl_name, saved_dn),
                 )
-                project_id = cur.lastrowid
+                budget_line_id = cur.lastrowid
 
             # Insert allocation line
             cur = conn.execute(
                 """
                 INSERT INTO allocation_lines
-                    (employee_id, project_id, fund_code, source, account,
+                    (employee_id, budget_line_id, fund_code, source, account,
                      cost_code_1, cost_code_2, cost_code_3, program_code)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     current_employee_id,
-                    project_id,
+                    budget_line_id,
                     row["Fund Code"].strip() or None,
                     row["Source"].strip() or None,
                     row["Account"].strip() or None,

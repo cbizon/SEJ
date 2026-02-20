@@ -55,16 +55,16 @@ def test_basic_import(tmp):
     assert len(employees) == 1
     assert employees[0]["name"] == "Smith,Jane"
 
-    projects = conn.execute(
-        "SELECT project_code FROM projects WHERE project_code != ?", (NON_PROJECT_CODE,)
+    budget_lines = conn.execute(
+        "SELECT budget_line_code FROM budget_lines WHERE budget_line_code != ?", (NON_PROJECT_CODE,)
     ).fetchall()
-    assert {r["project_code"] for r in projects} == {"5120001", "5120002"}
+    assert {r["budget_line_code"] for r in budget_lines} == {"5120001", "5120002"}
 
     efforts = conn.execute("SELECT * FROM efforts").fetchall()
     assert len(efforts) == 4  # 2 lines × 2 months
 
 
-def test_na_project_becomes_non_project(tmp):
+def test_na_project_becomes_imputed_budget_line(tmp):
     tsv = _tsv(tmp)
     write_tsv(tsv, [
         ["Jones,Bob", "Ops", "20152", "12001", "512120", "", "", "", "VROPS", "N/A", "N/A", "100.00%", ""],
@@ -75,11 +75,18 @@ def test_na_project_becomes_non_project(tmp):
     conn = get_connection(_db(tmp))
     line = conn.execute(
         """
-        SELECT p.project_code FROM allocation_lines al
-        JOIN projects p ON p.id = al.project_id
+        SELECT bl.budget_line_code, bl.project_id FROM allocation_lines al
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
         """
     ).fetchone()
-    assert line["project_code"] == NON_PROJECT_CODE
+    # Should construct imputed code from accounting fields
+    assert line["budget_line_code"] == "I:20152:12001:512120::::VROPS"
+
+    # Should belong to the Non-Project project
+    np_project = conn.execute(
+        "SELECT id FROM projects WHERE is_nonproject = 1"
+    ).fetchone()
+    assert line["project_id"] == np_project["id"]
 
 
 def test_blank_effort_cells_skipped(tmp):
@@ -126,10 +133,10 @@ def test_project_name_populated(tmp):
 
     from sej.db import get_connection
     conn = get_connection(_db(tmp))
-    project = conn.execute(
-        "SELECT name FROM projects WHERE project_code = '5199999'"
+    bl = conn.execute(
+        "SELECT name FROM budget_lines WHERE budget_line_code = '5199999'"
     ).fetchone()
-    assert project["name"] == "The Big Project"
+    assert bl["name"] == "The Big Project"
 
 
 def test_load_logs_audit(tmp):
@@ -145,6 +152,29 @@ def test_load_logs_audit(tmp):
     log = conn.execute("SELECT * FROM audit_log WHERE action='load'").fetchone()
     conn.close()
     assert log is not None
+
+
+def test_duplicate_project_name_reuses_project(tmp):
+    """Two budget lines with the same project name share a single project record."""
+    tsv = _tsv(tmp)
+    write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120", "", "", "", "", "5120001", "Shared Project", "50.00%", ""],
+        ["",           "Engineering", "25210", "49000", "511120", "", "", "", "", "5120002", "Shared Project", "50.00%", ""],
+    ])
+    load_tsv(tsv, _db(tmp))
+
+    from sej.db import get_connection
+    conn = get_connection(_db(tmp))
+    projects = conn.execute(
+        "SELECT id FROM projects WHERE name = 'Shared Project'"
+    ).fetchall()
+    assert len(projects) == 1
+
+    bls = conn.execute(
+        "SELECT project_id FROM budget_lines WHERE budget_line_code IN ('5120001', '5120002')"
+    ).fetchall()
+    assert len({r["project_id"] for r in bls}) == 1
+    conn.close()
 
 
 def test_load_as_branch_bootstrap(tmp):

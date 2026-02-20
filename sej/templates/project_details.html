@@ -87,18 +87,18 @@
     </style>
 </head>
 <body>
-    <h1>Project Details</h1>
+    <h1>Budget Line Details</h1>
     <nav><a href="/reports">&larr; Reports</a></nav>
 
     <div class="controls">
-        <label for="project-select">Project:</label>
+        <label for="project-select">Budget Line:</label>
         <select id="project-select">
             <option value="">Loading&hellip;</option>
         </select>
     </div>
 
     <div id="error"></div>
-    <p id="project-placeholder">Select a project above.</p>
+    <p id="project-placeholder">Select a budget line above.</p>
 
     <div id="project-info">
         <dl id="project-info-dl"></dl>
@@ -375,11 +375,11 @@
             el.style.display = "";
         }
 
-        function loadProject(project) {
+        function loadProject(budgetLine) {
             document.getElementById("error").style.display = "none";
-            if (!project) { showProjectInfo(null); showSpendingChart(null); showChangeHistory(null); return; }
+            if (!budgetLine) { showProjectInfo(null); showSpendingChart(null); showChangeHistory(null); return; }
 
-            fetch(`/api/project-details?project=${encodeURIComponent(project)}`)
+            fetch(`/api/project-details?budget_line=${encodeURIComponent(budgetLine)}`)
                 .then(r => {
                     if (!r.ok) return r.text().then(t => { throw new Error(`Server error ${r.status}: ${t}`); });
                     return r.json();
@@ -396,7 +396,7 @@
                 })
                 .catch(err => showError(err.message));
 
-            fetch(`/api/project-change-history?project=${encodeURIComponent(project)}`)
+            fetch(`/api/project-change-history?budget_line=${encodeURIComponent(budgetLine)}`)
                 .then(r => {
                     if (!r.ok) return r.text().then(t => { throw new Error(`Server error ${r.status}: ${t}`); });
                     return r.json();
@@ -405,20 +405,20 @@
                 .catch(err => showError(err.message));
         }
 
-        fetch("/api/projects")
+        fetch("/api/budget-lines")
             .then(r => r.json())
-            .then(projects => {
+            .then(budgetLines => {
                 const sel = document.getElementById("project-select");
-                sel.innerHTML = '<option value="">-- select a project --</option>';
-                projects.forEach(p => {
+                sel.innerHTML = '<option value="">-- select a budget line --</option>';
+                budgetLines.forEach(bl => {
                     const opt = document.createElement("option");
-                    opt.value = p.project_code;
-                    opt.textContent = p.project_code + (p.name ? " — " + p.name : "");
+                    opt.value = bl.budget_line_code;
+                    opt.textContent = bl.budget_line_code + (bl.name ? " — " + bl.name : "");
                     sel.appendChild(opt);
                 });
-                if (projects.length === 1) {
-                    sel.value = projects[0].project_code;
-                    loadProject(projects[0].project_code);
+                if (budgetLines.length === 1) {
+                    sel.value = budgetLines[0].budget_line_code;
+                    loadProject(budgetLines[0].budget_line_code);
                 }
             });
 

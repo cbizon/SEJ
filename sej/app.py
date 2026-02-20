@@ -11,6 +11,7 @@ from sej.queries import (
     get_spreadsheet_rows_with_ids,
     get_employees,
     get_projects,
+    get_budget_lines,
     get_branch_info,
     update_effort,
     add_allocation_line,
@@ -18,6 +19,8 @@ from sej.queries import (
     add_group,
     add_project,
     update_project,
+    add_budget_line,
+    update_budget_line,
     update_employee,
     fix_totals,
     get_audit_log,
@@ -89,6 +92,10 @@ def create_app(db_path=None):
     def api_projects():
         return jsonify(get_projects(_resolve_db(app)))
 
+    @app.route("/api/budget-lines")
+    def api_budget_lines():
+        return jsonify(get_budget_lines(_resolve_db(app)))
+
     @app.route("/api/effort", methods=["PUT"])
     def api_update_effort():
         db = _resolve_db(app)
@@ -129,15 +136,15 @@ def create_app(db_path=None):
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
             return jsonify({"error": "Request body must be JSON"}), 400
-        for key in ("employee_name", "project_code"):
+        for key in ("employee_name", "budget_line_code"):
             if key not in body:
                 return jsonify({"error": f"Missing required field: {key}"}), 400
 
         employee_name = body["employee_name"]
-        project_code = body["project_code"]
+        budget_line_code = body["budget_line_code"]
 
         try:
-            line_id = add_allocation_line(db, employee_name, project_code)
+            line_id = add_allocation_line(db, employee_name, budget_line_code)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         return jsonify({"allocation_line_id": line_id})
@@ -243,20 +250,19 @@ def create_app(db_path=None):
             return jsonify({"error": "Missing required field: name"}), 400
 
         try:
-            project_code = add_project(
+            project_id = add_project(
                 db,
                 body["name"].strip(),
+                local_pi_id=body.get("local_pi_id"),
+                admin_group_id=body.get("admin_group_id"),
                 start_year=body.get("start_year"),
                 start_month=body.get("start_month"),
                 end_year=body.get("end_year"),
                 end_month=body.get("end_month"),
-                local_pi_id=body.get("local_pi_id"),
-                personnel_budget=body.get("personnel_budget"),
-                admin_group_id=body.get("admin_group_id"),
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
-        return jsonify({"project_code": project_code})
+        return jsonify({"project_id": project_id})
 
     @app.route("/api/project", methods=["PUT"])
     def api_update_project():
@@ -268,8 +274,8 @@ def create_app(db_path=None):
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
             return jsonify({"error": "Request body must be JSON"}), 400
-        if "project_code" not in body:
-            return jsonify({"error": "Missing required field: project_code"}), 400
+        if "project_id" not in body:
+            return jsonify({"error": "Missing required field: project_id"}), 400
 
         name = body.get("name")
         if name is not None:
@@ -277,15 +283,81 @@ def create_app(db_path=None):
         try:
             update_project(
                 db,
-                body["project_code"],
+                int(body["project_id"]),
                 name=name,
+                local_pi_id=body.get("local_pi_id"),
+                admin_group_id=body.get("admin_group_id"),
                 start_year=body.get("start_year"),
                 start_month=body.get("start_month"),
                 end_year=body.get("end_year"),
                 end_month=body.get("end_month"),
-                local_pi_id=body.get("local_pi_id"),
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"ok": True})
+
+    @app.route("/api/budget-line", methods=["POST"])
+    def api_add_budget_line():
+        db = _resolve_db(app)
+        info = get_branch_info(db)
+        if info.get("db_role") != "branch":
+            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "Request body must be JSON"}), 400
+        if "project_id" not in body:
+            return jsonify({"error": "Missing required field: project_id"}), 400
+
+        display_name = body.get("display_name")
+        if display_name is not None:
+            display_name = display_name.strip() or None
+        try:
+            code = add_budget_line(
+                db,
+                int(body["project_id"]),
+                display_name=display_name,
+                budget_line_code=body.get("budget_line_code"),
+                start_year=body.get("start_year"),
+                start_month=body.get("start_month"),
+                end_year=body.get("end_year"),
+                end_month=body.get("end_month"),
                 personnel_budget=body.get("personnel_budget"),
-                admin_group_id=body.get("admin_group_id"),
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"budget_line_code": code})
+
+    @app.route("/api/budget-line", methods=["PUT"])
+    def api_update_budget_line():
+        db = _resolve_db(app)
+        info = get_branch_info(db)
+        if info.get("db_role") != "branch":
+            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "Request body must be JSON"}), 400
+        if "budget_line_code" not in body:
+            return jsonify({"error": "Missing required field: budget_line_code"}), 400
+
+        display_name = body.get("display_name")
+        if display_name is not None:
+            display_name = display_name.strip() or None
+        project_id = body.get("project_id")
+        if project_id is not None:
+            project_id = int(project_id)
+        try:
+            update_budget_line(
+                db,
+                body["budget_line_code"],
+                display_name=display_name,
+                start_year=body.get("start_year"),
+                start_month=body.get("start_month"),
+                end_year=body.get("end_year"),
+                end_month=body.get("end_month"),
+                personnel_budget=body.get("personnel_budget"),
+                project_id=project_id,
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
@@ -335,6 +407,10 @@ def create_app(db_path=None):
         delete_branch(main, branch_name)
         return jsonify({"discarded": branch_name})
 
+    @app.route("/budget-lines")
+    def budget_lines_page():
+        return render_template("budget_lines.html")
+
     @app.route("/reports")
     def reports():
         return render_template("reports.html")
@@ -380,18 +456,18 @@ def create_app(db_path=None):
     @app.route("/api/project-details")
     def api_project_details():
         main = app.config["MAIN_DB_PATH"]
-        project = request.args.get("project", "")
-        if not project:
-            return jsonify({"error": "Missing required parameter: project"}), 400
-        return jsonify(get_project_details(main, project))
+        budget_line = request.args.get("budget_line", "")
+        if not budget_line:
+            return jsonify({"error": "Missing required parameter: budget_line"}), 400
+        return jsonify(get_project_details(main, budget_line))
 
     @app.route("/api/project-change-history")
     def api_project_change_history():
         main = app.config["MAIN_DB_PATH"]
-        project = request.args.get("project", "")
-        if not project:
-            return jsonify({"error": "Missing required parameter: project"}), 400
-        return jsonify(get_project_change_history(main, project))
+        budget_line = request.args.get("budget_line", "")
+        if not budget_line:
+            return jsonify({"error": "Missing required parameter: budget_line"}), 400
+        return jsonify(get_project_change_history(main, budget_line))
 
     @app.route("/history")
     def history():

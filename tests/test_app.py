@@ -38,8 +38,8 @@ def loaded_db(tmp_path):
         ["", "Engineering", "25210", "49000", "511120",
          "", "", "", "", "5120002", "Gadget Project",
          "50.00%", "40.00%"],
-        ["Jones,Bob", "Ops", "20152", "12001", "512120",
-         "", "", "", "VROPS", "N/A", "N/A",
+        ["Jones,Bob", "Ops", "", "", "",
+         "", "", "", "", "N/A", "N/A",
          "100.00%", "100.00%"],
     ])
     load_tsv(tsv, db)
@@ -81,8 +81,8 @@ def test_api_data_returns_200(client):
 def test_index_contains_column_headers(client):
     payload = client.get("/api/data").json
     cols = payload["columns"]
-    for header in ["Employee", "Group", "Fund Code", "Project Id",
-                   "Project Name", "July 2025", "August 2025"]:
+    for header in ["Employee", "Group", "Fund Code", "Budget Line Code",
+                   "Budget Line Name", "July 2025", "August 2025"]:
         assert header in cols
 
 
@@ -102,8 +102,8 @@ def test_index_contains_percentages(client):
 
 def test_non_project_shows_non_project(client):
     payload = client.get("/api/data").json
-    project_ids = [row["Project Id"] for row in payload["data"]]
-    assert "Non-Project" in project_ids
+    budget_line_codes = [row["Budget Line Code"] for row in payload["data"]]
+    assert "Non-Project" in budget_line_codes
 
 
 def test_continuation_row_carries_employee_name(client):
@@ -209,7 +209,15 @@ def test_api_add_employee_default_salary(branch_client, branch_db):
 def test_api_projects(client):
     resp = client.get("/api/projects")
     assert resp.status_code == 200
-    codes = [p["project_code"] for p in resp.json]
+    names = [p["name"] for p in resp.json]
+    assert "Widget Project" in names
+    assert "Non-Project" in names
+
+
+def test_api_budget_lines(client):
+    resp = client.get("/api/budget-lines")
+    assert resp.status_code == 200
+    codes = [bl["budget_line_code"] for bl in resp.json]
     assert "5120001" in codes
     assert "Non-Project" in codes
 
@@ -266,7 +274,7 @@ def test_api_effort_invalid_percentage(branch_client):
 
 def test_api_allocation_line_forbidden_on_main(client):
     resp = client.post("/api/allocation_line", json={
-        "employee_name": "Smith,Jane", "project_code": "NEW001",
+        "employee_name": "Smith,Jane", "budget_line_code": "NEW001",
     })
     assert resp.status_code == 403
 
@@ -274,7 +282,7 @@ def test_api_allocation_line_forbidden_on_main(client):
 def test_api_allocation_line_create(branch_client):
     resp = branch_client.post("/api/allocation_line", json={
         "employee_name": "Smith,Jane",
-        "project_code": "5120001",
+        "budget_line_code": "5120001",
     })
     assert resp.status_code == 200
     assert "allocation_line_id" in resp.json
@@ -283,7 +291,7 @@ def test_api_allocation_line_create(branch_client):
 def test_api_allocation_line_unknown_project(branch_client):
     resp = branch_client.post("/api/allocation_line", json={
         "employee_name": "Smith,Jane",
-        "project_code": "NONEXISTENT",
+        "budget_line_code": "NONEXISTENT",
     })
     assert resp.status_code == 400
 
@@ -298,12 +306,12 @@ def test_api_add_project(branch_client, branch_db):
         "name": "Brand New Project",
     })
     assert resp.status_code == 200
-    code = resp.json["project_code"]
+    project_id = resp.json["project_id"]
 
     from sej.db import get_connection
     conn = get_connection(branch_db)
     proj = conn.execute(
-        "SELECT name FROM projects WHERE project_code = ?", (code,)
+        "SELECT name FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
     conn.close()
     assert proj["name"] == "Brand New Project"
@@ -317,31 +325,48 @@ def test_api_add_project_with_details(branch_client, branch_db):
 
     resp = branch_client.post("/api/project", json={
         "name": "Detailed Project",
-        "start_year": 2025,
-        "start_month": 1,
-        "end_year": 2027,
-        "end_month": 12,
         "local_pi_id": internal["id"],
-        "personnel_budget": 750000.0,
         "admin_group_id": admin_group_id,
     })
     assert resp.status_code == 200
-    code = resp.json["project_code"]
+    project_id = resp.json["project_id"]
 
     from sej.db import get_connection
     conn = get_connection(branch_db)
     proj = conn.execute(
-        "SELECT * FROM projects WHERE project_code = ?", (code,)
+        "SELECT * FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
     conn.close()
     assert proj["name"] == "Detailed Project"
-    assert proj["start_year"] == 2025
-    assert proj["start_month"] == 1
-    assert proj["end_year"] == 2027
-    assert proj["end_month"] == 12
     assert proj["local_pi_id"] == internal["id"]
-    assert proj["personnel_budget"] == 750000.0
     assert proj["admin_group_id"] == admin_group_id
+
+
+def test_api_add_project_with_dates(branch_client, branch_db):
+    resp = branch_client.post("/api/project", json={
+        "name": "Dated Project",
+        "start_year": 2025, "start_month": 7,
+        "end_year": 2026, "end_month": 6,
+    })
+    assert resp.status_code == 200
+    project_id = resp.json["project_id"]
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    proj = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    conn.close()
+    assert proj["start_year"] == 2025
+    assert proj["start_month"] == 7
+    assert proj["end_year"] == 2026
+    assert proj["end_month"] == 6
+
+
+def test_api_add_project_unpaired_date_rejected(branch_client):
+    resp = branch_client.post("/api/project", json={
+        "name": "Bad Date Project",
+        "start_year": 2025,
+    })
+    assert resp.status_code == 400
 
 
 def test_api_add_project_external_pi_rejected(branch_client, branch_db):
@@ -360,30 +385,75 @@ def test_api_add_project_external_pi_rejected(branch_client, branch_db):
     assert "internal" in resp.json["error"]
 
 
-def test_api_add_project_unpaired_start_date_rejected(branch_client):
+def test_api_add_budget_line_forbidden_on_main(client):
+    resp = client.post("/api/budget-line", json={"project_id": 1})
+    assert resp.status_code == 403
+
+
+def test_api_add_budget_line(branch_client, branch_db):
+    # First create a project
+    resp = branch_client.post("/api/project", json={"name": "BL Test Project"})
+    project_id = resp.json["project_id"]
+
+    resp = branch_client.post("/api/budget-line", json={
+        "project_id": project_id,
+        "display_name": "Budget Line A",
+        "start_year": 2025,
+        "start_month": 1,
+        "end_year": 2027,
+        "end_month": 12,
+        "personnel_budget": 750000.0,
+    })
+    assert resp.status_code == 200
+    code = resp.json["budget_line_code"]
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    bl = conn.execute(
+        "SELECT * FROM budget_lines WHERE budget_line_code = ?", (code,)
+    ).fetchone()
+    conn.close()
+    assert bl["display_name"] == "Budget Line A"
+    assert bl["start_year"] == 2025
+    assert bl["start_month"] == 1
+    assert bl["end_year"] == 2027
+    assert bl["end_month"] == 12
+    assert bl["personnel_budget"] == 750000.0
+
+
+def test_api_add_budget_line_unpaired_start_date_rejected(branch_client, branch_db):
     """start_year without start_month is rejected."""
-    resp = branch_client.post("/api/project", json={
-        "name": "Bad Dates",
+    resp = branch_client.post("/api/project", json={"name": "Dates Test"})
+    project_id = resp.json["project_id"]
+
+    resp = branch_client.post("/api/budget-line", json={
+        "project_id": project_id,
         "start_year": 2025,
     })
     assert resp.status_code == 400
     assert "start_year" in resp.json["error"]
 
 
-def test_api_add_project_unpaired_end_date_rejected(branch_client):
+def test_api_add_budget_line_unpaired_end_date_rejected(branch_client, branch_db):
     """end_month without end_year is rejected."""
-    resp = branch_client.post("/api/project", json={
-        "name": "Bad Dates",
+    resp = branch_client.post("/api/project", json={"name": "Dates Test"})
+    project_id = resp.json["project_id"]
+
+    resp = branch_client.post("/api/budget-line", json={
+        "project_id": project_id,
         "end_month": 6,
     })
     assert resp.status_code == 400
     assert "end_year" in resp.json["error"]
 
 
-def test_api_add_project_invalid_month_rejected(branch_client):
+def test_api_add_budget_line_invalid_month_rejected(branch_client, branch_db):
     """Month outside 1-12 is rejected."""
-    resp = branch_client.post("/api/project", json={
-        "name": "Bad Month",
+    resp = branch_client.post("/api/project", json={"name": "Month Test"})
+    project_id = resp.json["project_id"]
+
+    resp = branch_client.post("/api/budget-line", json={
+        "project_id": project_id,
         "start_year": 2025,
         "start_month": 13,
     })
@@ -391,10 +461,38 @@ def test_api_add_project_invalid_month_rejected(branch_client):
     assert "start_month" in resp.json["error"]
 
 
-def test_api_add_project_negative_budget_rejected(branch_client):
-    """Negative personnel budget is rejected."""
+def test_api_add_budget_line_non_4digit_year_rejected(branch_client, branch_db):
+    """Year that is not a 4-digit number is rejected for budget lines."""
+    resp = branch_client.post("/api/project", json={"name": "Year Test"})
+    project_id = resp.json["project_id"]
+
+    resp = branch_client.post("/api/budget-line", json={
+        "project_id": project_id,
+        "start_year": 1,
+        "start_month": 7,
+    })
+    assert resp.status_code == 400
+    assert "4-digit" in resp.json["error"]
+
+
+def test_api_add_project_non_4digit_year_rejected(branch_client):
+    """Year that is not a 4-digit number is rejected for projects."""
     resp = branch_client.post("/api/project", json={
-        "name": "Bad Budget",
+        "name": "Year Test Project",
+        "start_year": 1,
+        "start_month": 7,
+    })
+    assert resp.status_code == 400
+    assert "4-digit" in resp.json["error"]
+
+
+def test_api_add_budget_line_negative_budget_rejected(branch_client, branch_db):
+    """Negative personnel budget is rejected."""
+    resp = branch_client.post("/api/project", json={"name": "Budget Test"})
+    project_id = resp.json["project_id"]
+
+    resp = branch_client.post("/api/budget-line", json={
+        "project_id": project_id,
         "personnel_budget": -100.0,
     })
     assert resp.status_code == 400
@@ -403,7 +501,7 @@ def test_api_add_project_negative_budget_rejected(branch_client):
 
 def test_api_update_project_forbidden_on_main(client):
     resp = client.put("/api/project", json={
-        "project_code": "5120001",
+        "project_id": 1,
         "name": "Updated Name",
     })
     assert resp.status_code == 403
@@ -415,15 +513,15 @@ def test_api_update_project(branch_client, branch_db):
     groups = branch_client.get("/api/groups").json
     admin_group_id = groups[0]["id"]
 
+    # Get the project id for the project containing budget line 5120001
+    budget_lines = branch_client.get("/api/budget-lines").json
+    bl = next(b for b in budget_lines if b["budget_line_code"] == "5120001")
+    project_id = bl["project_id"]
+
     resp = branch_client.put("/api/project", json={
-        "project_code": "5120001",
+        "project_id": project_id,
         "name": "Widget Project Updated",
-        "start_year": 2024,
-        "start_month": 6,
-        "end_year": 2026,
-        "end_month": 9,
         "local_pi_id": internal["id"],
-        "personnel_budget": 500000.0,
         "admin_group_id": admin_group_id,
     })
     assert resp.status_code == 200
@@ -431,17 +529,82 @@ def test_api_update_project(branch_client, branch_db):
     from sej.db import get_connection
     conn = get_connection(branch_db)
     proj = conn.execute(
-        "SELECT * FROM projects WHERE project_code = ?", ("5120001",)
+        "SELECT * FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
     conn.close()
     assert proj["name"] == "Widget Project Updated"
-    assert proj["start_year"] == 2024
-    assert proj["start_month"] == 6
-    assert proj["end_year"] == 2026
-    assert proj["end_month"] == 9
     assert proj["local_pi_id"] == internal["id"]
-    assert proj["personnel_budget"] == 500000.0
     assert proj["admin_group_id"] == admin_group_id
+
+
+def test_api_update_project_with_dates(branch_client, branch_db):
+    budget_lines = branch_client.get("/api/budget-lines").json
+    bl = next(b for b in budget_lines if b["budget_line_code"] == "5120001")
+    project_id = bl["project_id"]
+
+    resp = branch_client.put("/api/project", json={
+        "project_id": project_id,
+        "start_year": 2025, "start_month": 1,
+        "end_year": 2026, "end_month": 12,
+    })
+    assert resp.status_code == 200
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    proj = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    conn.close()
+    assert proj["start_year"] == 2025
+    assert proj["start_month"] == 1
+    assert proj["end_year"] == 2026
+    assert proj["end_month"] == 12
+
+
+def test_api_update_project_unpaired_date_rejected(branch_client, branch_db):
+    budget_lines = branch_client.get("/api/budget-lines").json
+    bl = next(b for b in budget_lines if b["budget_line_code"] == "5120001")
+    project_id = bl["project_id"]
+
+    resp = branch_client.put("/api/project", json={
+        "project_id": project_id,
+        "end_year": 2026,
+    })
+    assert resp.status_code == 400
+
+
+def test_api_update_project_dates_cleared(branch_client, branch_db):
+    """Passing null dates clears them."""
+    budget_lines = branch_client.get("/api/budget-lines").json
+    bl = next(b for b in budget_lines if b["budget_line_code"] == "5120001")
+    project_id = bl["project_id"]
+
+    branch_client.put("/api/project", json={
+        "project_id": project_id,
+        "start_year": 2025, "start_month": 1,
+        "end_year": 2026, "end_month": 12,
+    })
+    resp = branch_client.put("/api/project", json={
+        "project_id": project_id,
+        "start_year": None, "start_month": None,
+        "end_year": None, "end_month": None,
+    })
+    assert resp.status_code == 200
+
+    from sej.db import get_connection
+    conn = get_connection(branch_db)
+    proj = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    conn.close()
+    assert proj["start_year"] is None
+    assert proj["end_year"] is None
+
+
+def test_api_projects_returns_date_fields(client):
+    resp = client.get("/api/projects")
+    assert resp.status_code == 200
+    for p in resp.json:
+        assert "start_year" in p
+        assert "start_month" in p
+        assert "end_year" in p
+        assert "end_month" in p
 
 
 def test_api_update_project_external_pi_rejected(branch_client, branch_db):
@@ -452,8 +615,12 @@ def test_api_update_project_external_pi_rejected(branch_client, branch_db):
     employees = branch_client.get("/api/employees").json
     external = next(e for e in employees if not e["is_internal"])
 
+    budget_lines = branch_client.get("/api/budget-lines").json
+    bl = next(b for b in budget_lines if b["budget_line_code"] == "5120001")
+    project_id = bl["project_id"]
+
     resp = branch_client.put("/api/project", json={
-        "project_code": "5120001",
+        "project_id": project_id,
         "local_pi_id": external["id"],
     })
     assert resp.status_code == 400
@@ -462,17 +629,41 @@ def test_api_update_project_external_pi_rejected(branch_client, branch_db):
 
 def test_api_update_project_not_found(branch_client):
     resp = branch_client.put("/api/project", json={
-        "project_code": "NONEXISTENT",
+        "project_id": 99999,
         "name": "Nope",
     })
     assert resp.status_code == 400
 
 
-def test_api_update_project_dates_reject_early_effort(branch_client):
+def test_api_update_project_duplicate_name_rejected(branch_client, branch_db):
+    """Renaming a project to a name already used by another project is rejected."""
+    from sej.queries import get_projects
+    projects = get_projects(branch_db)
+    non_np = [p for p in projects if not p["is_nonproject"]]
+    assert len(non_np) >= 2, "Need at least two non-nonproject projects for this test"
+    p1, p2 = non_np[0], non_np[1]
+
+    resp = branch_client.put("/api/project", json={
+        "project_id": p1["id"],
+        "name": p2["name"],
+    })
+    assert resp.status_code == 400
+    assert "already exists" in resp.json["error"]
+
+
+def test_api_update_budget_line_forbidden_on_main(client):
+    resp = client.put("/api/budget-line", json={
+        "budget_line_code": "5120001",
+        "name": "Updated Name",
+    })
+    assert resp.status_code == 403
+
+
+def test_api_update_budget_line_dates_reject_early_effort(branch_client):
     """Setting start after existing effort is rejected."""
     # 5120001 has effort in Jul 2025 and Aug 2025; start after that should fail
-    resp = branch_client.put("/api/project", json={
-        "project_code": "5120001",
+    resp = branch_client.put("/api/budget-line", json={
+        "budget_line_code": "5120001",
         "start_year": 2025,
         "start_month": 8,  # Aug 2025 — Jul 2025 is before this
     })
@@ -480,11 +671,11 @@ def test_api_update_project_dates_reject_early_effort(branch_client):
     assert "Jul 2025" in resp.json["error"]
 
 
-def test_api_update_project_dates_reject_late_effort(branch_client):
+def test_api_update_budget_line_dates_reject_late_effort(branch_client):
     """Setting end before existing effort is rejected."""
     # 5120001 has effort in Aug 2025; end before that should fail
-    resp = branch_client.put("/api/project", json={
-        "project_code": "5120001",
+    resp = branch_client.put("/api/budget-line", json={
+        "budget_line_code": "5120001",
         "end_year": 2025,
         "end_month": 7,  # Jul 2025 — Aug 2025 is after this
     })
@@ -492,10 +683,10 @@ def test_api_update_project_dates_reject_late_effort(branch_client):
     assert "Aug 2025" in resp.json["error"]
 
 
-def test_api_update_project_dates_accept_valid_range(branch_client):
+def test_api_update_budget_line_dates_accept_valid_range(branch_client):
     """Setting dates that encompass all existing effort succeeds."""
-    resp = branch_client.put("/api/project", json={
-        "project_code": "5120001",
+    resp = branch_client.put("/api/budget-line", json={
+        "budget_line_code": "5120001",
         "start_year": 2025,
         "start_month": 7,
         "end_year": 2025,
@@ -504,19 +695,108 @@ def test_api_update_project_dates_accept_valid_range(branch_client):
     assert resp.status_code == 200
 
 
-def test_api_projects_returns_detail_fields(client):
-    resp = client.get("/api/projects")
+def test_api_budget_lines_returns_detail_fields(client):
+    resp = client.get("/api/budget-lines")
     assert resp.status_code == 200
-    proj = next(p for p in resp.json if p["project_code"] == "5120001")
-    assert "start_year" in proj
-    assert "start_month" in proj
-    assert "end_year" in proj
-    assert "end_month" in proj
-    assert "local_pi_id" in proj
-    assert "local_pi_name" in proj
-    assert "personnel_budget" in proj
-    assert "admin_group_id" in proj
-    assert "admin_group_name" in proj
+    bl = next(b for b in resp.json if b["budget_line_code"] == "5120001")
+    assert "start_year" in bl
+    assert "start_month" in bl
+    assert "end_year" in bl
+    assert "end_month" in bl
+    assert "local_pi_id" in bl
+    assert "local_pi_name" in bl
+    assert "personnel_budget" in bl
+    assert "admin_group_id" in bl
+    assert "admin_group_name" in bl
+    assert "display_name" in bl
+
+
+def test_api_budget_lines_returns_display_name(client):
+    resp = client.get("/api/budget-lines")
+    bl = next(b for b in resp.json if b["budget_line_code"] == "5120001")
+    assert bl["display_name"] == "Widget Project"  # initialized from finance name on import
+    assert bl["name"] == "Widget Project"  # finance name from import
+
+
+def test_api_update_budget_line_sets_display_name(branch_client, branch_db):
+    resp = branch_client.put("/api/budget-line", json={
+        "budget_line_code": "5120001",
+        "display_name": "My Friendly Name",
+    })
+    assert resp.status_code == 200
+
+    from sej.queries import get_budget_lines
+    bls = get_budget_lines(branch_db)
+    bl = next(b for b in bls if b["budget_line_code"] == "5120001")
+    assert bl["display_name"] == "My Friendly Name"
+    assert bl["name"] == "Widget Project"  # finance name unchanged
+
+
+def test_display_name_used_in_spreadsheet_rows(branch_client, branch_db):
+    """When display_name is set, it appears as Budget Line Name in the data API."""
+    branch_client.put("/api/budget-line", json={
+        "budget_line_code": "5120001",
+        "display_name": "Friendly Widget",
+    })
+    payload = branch_client.get("/api/data").json
+    names = [row.get("Budget Line Name") for row in payload["data"]]
+    assert "Friendly Widget" in names
+    assert "Widget Project" not in names  # finance name replaced
+
+
+def test_display_name_initialized_from_finance_name_on_import(tmp_path):
+    """On first import, display_name is set to the finance name."""
+    tsv = tmp_path / "data_anon.tsv"
+    db = tmp_path / "test_anon.db"
+    _write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "50.00%", "60.00%"],
+    ])
+    load_tsv(tsv, db)
+
+    from sej.db import get_connection
+    conn = get_connection(db)
+    bl = conn.execute(
+        "SELECT name, display_name FROM budget_lines WHERE budget_line_code = ?",
+        ("5120001",),
+    ).fetchone()
+    conn.close()
+    assert bl["name"] == "Widget Project"
+    assert bl["display_name"] == "Widget Project"
+
+
+def test_display_name_preserved_across_reimport(tmp_path):
+    """A user-changed display_name survives a re-import; finance name is still refreshed."""
+    tsv = tmp_path / "data_anon.tsv"
+    db = tmp_path / "test_anon.db"
+    _write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "50.00%", "60.00%"],
+    ])
+    load_tsv(tsv, db)
+
+    from sej.db import get_connection
+    conn = get_connection(db)
+    conn.execute(
+        "UPDATE budget_lines SET display_name = ? WHERE budget_line_code = ?",
+        ("My Friendly Name", "5120001"),
+    )
+    conn.commit()
+    conn.close()
+
+    # Re-import the same TSV
+    load_tsv(tsv, db)
+
+    conn = get_connection(db)
+    bl = conn.execute(
+        "SELECT name, display_name FROM budget_lines WHERE budget_line_code = ?",
+        ("5120001",),
+    ).fetchone()
+    conn.close()
+    assert bl["name"] == "Widget Project"         # finance name refreshed from TSV
+    assert bl["display_name"] == "My Friendly Name"  # user display_name preserved
 
 
 # --- Fix totals tests ---
@@ -535,8 +815,8 @@ def violations_db(tmp_path):
          "", "", "", "", "N/A", "N/A",
          "30.00%", ""],
         # Jones,Bob: 100% Non-Project = no violation
-        ["Jones,Bob", "Ops", "20152", "12001", "512120",
-         "", "", "", "VROPS", "N/A", "N/A",
+        ["Jones,Bob", "Ops", "", "", "",
+         "", "", "", "", "N/A", "N/A",
          "100.00%", ""],
     ])
     load_tsv(tsv, db)
@@ -580,8 +860,9 @@ def test_api_fix_totals(violations_branch_client, violations_branch_db):
     np_line = conn.execute("""
         SELECT al.id FROM allocation_lines al
         JOIN employees e ON e.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE e.name = 'Smith,Jane' AND p.project_code = 'Non-Project'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        JOIN projects p ON p.id = bl.project_id
+        WHERE e.name = 'Smith,Jane' AND p.is_nonproject = 1
     """).fetchone()
     effort = conn.execute(
         "SELECT percentage FROM efforts WHERE allocation_line_id = ? AND year = 2025 AND month = 7",
@@ -636,8 +917,9 @@ def test_api_fix_totals_adds_to_largest_np(multi_nonproject_db):
     # 27152 goes from 20% to 30%; 20152 stays at 10%.
     line_27152 = conn.execute("""
         SELECT al.id FROM allocation_lines al
-        JOIN projects p ON p.id = al.project_id
-        WHERE p.project_code = 'Non-Project' AND al.fund_code = '27152'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        JOIN projects p ON p.id = bl.project_id
+        WHERE p.is_nonproject = 1 AND al.fund_code = '27152'
     """).fetchone()
     effort_27152 = conn.execute(
         "SELECT percentage FROM efforts WHERE allocation_line_id = ? AND year = 2025 AND month = 7",
@@ -647,8 +929,9 @@ def test_api_fix_totals_adds_to_largest_np(multi_nonproject_db):
 
     line_20152 = conn.execute("""
         SELECT al.id FROM allocation_lines al
-        JOIN projects p ON p.id = al.project_id
-        WHERE p.project_code = 'Non-Project' AND al.fund_code = '20152'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        JOIN projects p ON p.id = bl.project_id
+        WHERE p.is_nonproject = 1 AND al.fund_code = '20152'
     """).fetchone()
     effort_20152 = conn.execute(
         "SELECT percentage FROM efforts WHERE allocation_line_id = ? AND year = 2025 AND month = 7",
@@ -669,8 +952,8 @@ def no_nonproject_db(tmp_path):
          "", "", "", "VRENG", "5120001", "Widget Project",
          "60.00%", ""],
         # Jones,Bob: balanced, no issue
-        ["Jones,Bob", "Ops", "20152", "12001", "512120",
-         "", "", "", "VROPS", "N/A", "N/A",
+        ["Jones,Bob", "Ops", "", "", "",
+         "", "", "", "", "N/A", "N/A",
          "100.00%", ""],
     ])
     load_tsv(tsv, db)
@@ -696,8 +979,8 @@ def test_fix_totals_creates_nonproject_line_when_missing(no_nonproject_db):
     np_line = conn.execute("""
         SELECT al.id FROM allocation_lines al
         JOIN employees e ON e.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE e.name = 'Smith,Jane' AND p.project_code = 'Non-Project'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE e.name = 'Smith,Jane' AND bl.budget_line_code = 'Non-Project'
     """).fetchone()
     assert np_line is not None
     effort = conn.execute(
@@ -754,8 +1037,9 @@ def test_fix_totals_abbott_adds_to_existing_np(abbott_db):
     # The 27152 NP line should be untouched at 10%
     line_27152 = conn.execute("""
         SELECT al.id FROM allocation_lines al
-        JOIN projects p ON p.id = al.project_id
-        WHERE p.project_code = 'Non-Project' AND al.fund_code = '27152'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        JOIN projects p ON p.id = bl.project_id
+        WHERE p.is_nonproject = 1 AND al.fund_code = '27152'
     """).fetchone()
     effort_27152 = conn.execute(
         "SELECT percentage FROM efforts WHERE allocation_line_id = ? AND year = 2025 AND month = 7",
@@ -813,9 +1097,9 @@ def test_fix_totals_baker_multi_np_over_100(baker_multi_np_over_100_db):
         FROM efforts e
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
         WHERE emp.name = 'Baker,Jeremy Boyd'
-          AND p.project_code = 'Non-Project'
+          AND bl.budget_line_code = 'Non-Project'
           AND e.year = 2025 AND e.month = 7
     """).fetchall()
     total_np = sum(r["percentage"] for r in np_efforts)
@@ -954,8 +1238,8 @@ def test_fix_totals_over_100_no_np_line_not_created(over_100_no_np_db):
     np_line = conn.execute("""
         SELECT al.id FROM allocation_lines al
         JOIN employees e ON e.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE e.name = 'Smith,Jane' AND p.project_code = 'Non-Project'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE e.name = 'Smith,Jane' AND bl.budget_line_code = 'Non-Project'
     """).fetchone()
     conn.close()
     assert np_line is None, "No Non-Project line should be created when total > 100"
@@ -1286,7 +1570,7 @@ def test_api_group_details_ops_person_np(main_client):
 
 def test_api_group_details_projects(main_client):
     data = main_client.get("/api/group-details?group=Engineering").json
-    codes = [r["project_code"] for r in data["projects"]]
+    codes = [r["budget_line_code"] for r in data["projects"]]
     assert "5120001" in codes
     assert "5120002" in codes
 
@@ -1294,7 +1578,7 @@ def test_api_group_details_projects(main_client):
 def test_api_group_details_project_effort(main_client):
     # Smith,Jane: 50% on 5120001 in July — that's the only Engineering member, so total = 50%
     data = main_client.get("/api/group-details?group=Engineering").json
-    proj = next(r for r in data["projects"] if r["project_code"] == "5120001")
+    proj = next(r for r in data["projects"] if r["budget_line_code"] == "5120001")
     assert abs(proj["July 2025"] - 50.0) < 0.1
 
 
@@ -1382,7 +1666,7 @@ def test_api_project_details_missing_param(main_client):
 
 
 def test_api_project_details_structure(main_client):
-    resp = main_client.get("/api/project-details?project=5120001")
+    resp = main_client.get("/api/project-details?budget_line=5120001")
     assert resp.status_code == 200
     data = resp.json
     assert "months" in data
@@ -1391,71 +1675,65 @@ def test_api_project_details_structure(main_client):
 
 
 def test_api_project_details_months(main_client):
-    data = main_client.get("/api/project-details?project=5120001").json
+    data = main_client.get("/api/project-details?budget_line=5120001").json
     assert "July 2025" in data["months"]
     assert "August 2025" in data["months"]
 
 
 def test_api_project_details_start_date_filters_months(tmp_path):
-    """Months before the project start date are excluded from the display."""
-    # 5120001 has no effort in July (so start=August is valid).
-    # Jones,Bob has effort in July → July is in global months but not 5120001's range.
+    """Months before the budget line start date are excluded from the display."""
     tsv = tmp_path / "data_anon.tsv"
     db = tmp_path / "test_anon.db"
     _write_tsv(tsv, [
         ["Smith,Jane", "Engineering", "25210", "49000", "511120",
          "", "", "", "VRENG", "5120001", "Widget Project",
          "0.00%", "60.00%"],
-        ["Jones,Bob", "Ops", "20152", "12001", "512120",
-         "", "", "", "VROPS", "N/A", "N/A",
+        ["Jones,Bob", "Ops", "", "", "",
+         "", "", "", "", "N/A", "N/A",
          "100.00%", "100.00%"],
     ])
     load_tsv(tsv, db)
-    from sej.queries import update_project
-    update_project(db, "5120001", name="Widget Project",
-                   start_year=2025, start_month=8)
+    from sej.queries import update_budget_line
+    update_budget_line(db, "5120001", start_year=2025, start_month=8)
     app = create_app(db_path=db)
     app.config["TESTING"] = True
     with app.test_client() as c:
-        data = c.get("/api/project-details?project=5120001").json
+        data = c.get("/api/project-details?budget_line=5120001").json
     assert "July 2025" not in data["months"]
     assert "August 2025" in data["months"]
 
 
 def test_api_project_details_end_date_filters_months(tmp_path):
-    """Months after the project end date are excluded from the display."""
-    # 5120001 has no effort in August (so end=July is valid).
-    # Jones,Bob has effort in August → August is in global months but not 5120001's range.
+    """Months after the budget line end date are excluded from the display."""
     tsv = tmp_path / "data_anon.tsv"
     db = tmp_path / "test_anon.db"
     _write_tsv(tsv, [
         ["Smith,Jane", "Engineering", "25210", "49000", "511120",
          "", "", "", "VRENG", "5120001", "Widget Project",
          "50.00%", "0.00%"],
-        ["Jones,Bob", "Ops", "20152", "12001", "512120",
-         "", "", "", "VROPS", "N/A", "N/A",
+        ["Jones,Bob", "Ops", "", "", "",
+         "", "", "", "", "N/A", "N/A",
          "100.00%", "100.00%"],
     ])
     load_tsv(tsv, db)
-    from sej.queries import update_project
-    update_project(db, "5120001", name="Widget Project",
-                   end_year=2025, end_month=7)
+    from sej.queries import update_budget_line
+    update_budget_line(db, "5120001", end_year=2025, end_month=7)
     app = create_app(db_path=db)
     app.config["TESTING"] = True
     with app.test_client() as c:
-        data = c.get("/api/project-details?project=5120001").json
+        data = c.get("/api/project-details?budget_line=5120001").json
     assert "July 2025" in data["months"]
     assert "August 2025" not in data["months"]
 
 
 def test_api_project_details_fte_label(main_client):
-    data = main_client.get("/api/project-details?project=5120001").json
+    data = main_client.get("/api/project-details?budget_line=5120001").json
     assert data["fte_rows"][0]["label"] == "Internal FTE"
 
 
 def test_api_project_details_fte_values(main_client):
     # Smith,Jane: 50% on 5120001 in July → FTE = 0.50; 60% in August → FTE = 0.60
-    data = main_client.get("/api/project-details?project=5120001").json
+    data = main_client.get("/api/project-details?budget_line=5120001").json
     internal = data["fte_rows"][0]
     assert abs(internal["July 2025"] - 0.50) < 0.01
     assert abs(internal["August 2025"] - 0.60) < 0.01
@@ -1463,13 +1741,13 @@ def test_api_project_details_fte_values(main_client):
 
 def test_api_project_details_no_external_row_when_none(main_client):
     # No external employees in the base fixture → only one FTE row
-    data = main_client.get("/api/project-details?project=5120001").json
+    data = main_client.get("/api/project-details?budget_line=5120001").json
     assert len(data["fte_rows"]) == 1
 
 
 def test_api_project_details_people(main_client):
     # Only Smith,Jane works on 5120001
-    data = main_client.get("/api/project-details?project=5120001").json
+    data = main_client.get("/api/project-details?budget_line=5120001").json
     names = [r["name"] for r in data["people"]]
     assert "Smith,Jane" in names
     assert "Jones,Bob" not in names
@@ -1477,14 +1755,14 @@ def test_api_project_details_people(main_client):
 
 def test_api_project_details_person_effort(main_client):
     # Smith,Jane: 50% in July, 60% in August on 5120001
-    data = main_client.get("/api/project-details?project=5120001").json
+    data = main_client.get("/api/project-details?budget_line=5120001").json
     jane = next(r for r in data["people"] if r["name"] == "Smith,Jane")
     assert abs(jane["July 2025"] - 50.0) < 0.1
     assert abs(jane["August 2025"] - 60.0) < 0.1
 
 
 def test_api_project_details_person_group(main_client):
-    data = main_client.get("/api/project-details?project=5120001").json
+    data = main_client.get("/api/project-details?budget_line=5120001").json
     jane = next(r for r in data["people"] if r["name"] == "Smith,Jane")
     assert jane["group"] == "Engineering"
 
@@ -1566,7 +1844,7 @@ def test_api_add_employee_missing_json(branch_client):
 
 def test_api_project_details_nonproject(main_client):
     # Jones,Bob is 100% Non-Project → FTE = 1.0 per month
-    data = main_client.get("/api/project-details?project=Non-Project").json
+    data = main_client.get("/api/project-details?budget_line=Non-Project").json
     internal = data["fte_rows"][0]
     assert abs(internal["July 2025"] - 1.0) < 0.01
     bob = next(r for r in data["people"] if r["name"] == "Jones,Bob")
@@ -1577,13 +1855,12 @@ def test_api_project_details_nonproject(main_client):
 
 @pytest.fixture
 def spending_client(branch_db):
-    """Branch DB with budget and end date set on project 5120001."""
-    from sej.queries import update_project
+    """Branch DB with budget and end date set on budget line 5120001."""
+    from sej.queries import update_budget_line
     # Smith,Jane: salary=120000, 50% Jul → $5000, 60% Aug → $6000
-    update_project(branch_db, "5120001",
-                   name="Widget Project",
-                   personnel_budget=100000.0,
-                   end_year=2025, end_month=9)
+    update_budget_line(branch_db, "5120001",
+                       personnel_budget=100000.0,
+                       end_year=2025, end_month=9)
     app = create_app(db_path=branch_db)
     app.config["TESTING"] = True
     with app.test_client() as c:
@@ -1591,13 +1868,13 @@ def spending_client(branch_db):
 
 
 def test_spending_analysis_present(spending_client):
-    data = spending_client.get("/api/project-details?project=5120001").json
+    data = spending_client.get("/api/project-details?budget_line=5120001").json
     assert data["spending_analysis"] is not None
     assert len(data["spending_analysis"]) > 0
 
 
 def test_spending_analysis_absent_without_budget(main_client):
-    data = main_client.get("/api/project-details?project=5120001").json
+    data = main_client.get("/api/project-details?budget_line=5120001").json
     assert data["spending_analysis"] is None
 
 
@@ -1605,7 +1882,7 @@ def test_spending_analysis_values(spending_client):
     # Jul: 120000/12 * 0.50 = 5000 → remaining 95000
     # Aug: 120000/12 * 0.60 = 6000 → remaining 89000
     # Sep: extrapolated at 6000  → remaining 83000
-    data = spending_client.get("/api/project-details?project=5120001").json
+    data = spending_client.get("/api/project-details?budget_line=5120001").json
     points = {p["month"]: p["remaining"] for p in data["spending_analysis"]}
     assert abs(points["July 2025"] - 95000.0) < 1.0
     assert abs(points["August 2025"] - 89000.0) < 1.0
@@ -1613,24 +1890,23 @@ def test_spending_analysis_values(spending_client):
 
 
 def test_spending_analysis_covers_to_end(spending_client):
-    data = spending_client.get("/api/project-details?project=5120001").json
+    data = spending_client.get("/api/project-details?budget_line=5120001").json
     months = [p["month"] for p in data["spending_analysis"]]
     assert months[-1] == "September 2025"
 
 
 def test_spending_analysis_start_date_respected(branch_db):
-    """Chart starts at project start date with $0 spend for pre-effort months."""
-    from sej.queries import update_project
+    """Chart starts at budget line start date with $0 spend for pre-effort months."""
+    from sej.queries import update_budget_line
     # Start in May 2025 — two months before the first effort (July 2025)
-    update_project(branch_db, "5120001",
-                   name="Widget Project",
-                   start_year=2025, start_month=5,
-                   personnel_budget=100000.0,
-                   end_year=2025, end_month=8)
+    update_budget_line(branch_db, "5120001",
+                       start_year=2025, start_month=5,
+                       personnel_budget=100000.0,
+                       end_year=2025, end_month=8)
     app = create_app(db_path=branch_db)
     app.config["TESTING"] = True
     with app.test_client() as c:
-        data = c.get("/api/project-details?project=5120001").json
+        data = c.get("/api/project-details?budget_line=5120001").json
     points = {p["month"]: p["remaining"] for p in data["spending_analysis"]}
     # May and June have no effort → $0 spend → budget stays at 100000
     assert abs(points["May 2025"] - 100000.0) < 1.0
@@ -1640,22 +1916,15 @@ def test_spending_analysis_start_date_respected(branch_db):
 
 
 def test_spending_analysis_zero_spend_within_range(branch_db):
-    """Months within the data range with no effort for this project contribute $0."""
-    from sej.queries import update_project
-    # 5120002 has effort only in July 2025 (50%) and August 2025 (40%) for Smith,Jane.
-    # Set a start date of June 2025 — June is within global range but has no effort
-    # for 5120002 (global range starts July 2025, so June is actually before it).
-    # Instead verify Aug stays flat relative to July for a project that has effort
-    # in both months — and that the extrapolated Sep uses August's spend rate.
-    # Jul 5120002: 120000/12 * 0.50 = 5000; Aug: 120000/12 * 0.40 = 4000
-    update_project(branch_db, "5120002",
-                   name="Gadget Project",
-                   personnel_budget=80000.0,
-                   end_year=2025, end_month=9)
+    """Months within the data range with no effort for this budget line contribute $0."""
+    from sej.queries import update_budget_line
+    update_budget_line(branch_db, "5120002",
+                       personnel_budget=80000.0,
+                       end_year=2025, end_month=9)
     app = create_app(db_path=branch_db)
     app.config["TESTING"] = True
     with app.test_client() as c:
-        data = c.get("/api/project-details?project=5120002").json
+        data = c.get("/api/project-details?budget_line=5120002").json
     points = {p["month"]: p["remaining"] for p in data["spending_analysis"]}
     assert abs(points["July 2025"] - 75000.0) < 1.0   # 80000 - 5000
     assert abs(points["August 2025"] - 71000.0) < 1.0  # 75000 - 4000
@@ -1787,15 +2056,15 @@ def test_nonproject_by_person_total_excludes_external(external_group_client):
 
 def test_api_project_details_external_fte_row_present(external_group_client):
     # external_group_db: Smith,Jane (internal, 100%) and External,Person (external, 50%)
-    # both on project 5120001 in July 2025
-    data = external_group_client.get("/api/project-details?project=5120001").json
+    # both on budget line 5120001 in July 2025
+    data = external_group_client.get("/api/project-details?budget_line=5120001").json
     labels = [r["label"] for r in data["fte_rows"]]
     assert "Internal FTE" in labels
     assert "External FTE" in labels
 
 
 def test_api_project_details_external_fte_values(external_group_client):
-    data = external_group_client.get("/api/project-details?project=5120001").json
+    data = external_group_client.get("/api/project-details?budget_line=5120001").json
     internal = next(r for r in data["fte_rows"] if r["label"] == "Internal FTE")
     external = next(r for r in data["fte_rows"] if r["label"] == "External FTE")
     assert abs(internal["July 2025"] - 1.0) < 0.01
@@ -1804,7 +2073,7 @@ def test_api_project_details_external_fte_values(external_group_client):
 
 def test_api_project_details_external_fte_row_absent_when_no_external(main_client):
     # Base fixture has no external employees
-    data = main_client.get("/api/project-details?project=5120001").json
+    data = main_client.get("/api/project-details?budget_line=5120001").json
     labels = [r["label"] for r in data["fte_rows"]]
     assert "External FTE" not in labels
 
@@ -1935,8 +2204,8 @@ def test_fix_totals_skips_months_before_employee_start(tmp_path):
          "", "", "", "VRENG", "5120001", "Widget Project",
          "90.00%", "100.00%"],
         # Jones,Bob: always 100%
-        ["Jones,Bob", "Ops", "20152", "12001", "512120",
-         "", "", "", "VROPS", "N/A", "N/A",
+        ["Jones,Bob", "Ops", "", "", "",
+         "", "", "", "", "N/A", "N/A",
          "100.00%", "100.00%"],
     ])
     load_tsv(tsv, db)
@@ -1965,8 +2234,8 @@ def test_fix_totals_skips_months_before_employee_start(tmp_path):
     al = conn.execute("""
         SELECT al.id FROM allocation_lines al
         JOIN employees e ON e.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE e.name = 'Smith,Jane' AND p.project_code = '5120001'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE e.name = 'Smith,Jane' AND bl.budget_line_code = '5120001'
     """).fetchone()
     effort = conn.execute(
         "SELECT percentage FROM efforts WHERE allocation_line_id = ? AND year=2025 AND month=7",
@@ -1986,8 +2255,8 @@ def test_fix_totals_skips_months_after_employee_end(tmp_path):
          "", "", "", "VRENG", "5120001", "Widget Project",
          "100.00%", "90.00%"],
         # Jones,Bob: always 100%
-        ["Jones,Bob", "Ops", "20152", "12001", "512120",
-         "", "", "", "VROPS", "N/A", "N/A",
+        ["Jones,Bob", "Ops", "", "", "",
+         "", "", "", "", "N/A", "N/A",
          "100.00%", "100.00%"],
     ])
     load_tsv(tsv, db)
@@ -2014,8 +2283,8 @@ def test_fix_totals_skips_months_after_employee_end(tmp_path):
     al = conn.execute("""
         SELECT al.id FROM allocation_lines al
         JOIN employees e ON e.id = al.employee_id
-        JOIN projects p ON p.id = al.project_id
-        WHERE e.name = 'Smith,Jane' AND p.project_code = '5120001'
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE e.name = 'Smith,Jane' AND bl.budget_line_code = '5120001'
     """).fetchone()
     effort = conn.execute(
         "SELECT percentage FROM efforts WHERE allocation_line_id = ? AND year=2025 AND month=8",
@@ -2104,8 +2373,8 @@ def test_importer_preserves_employee_dates_across_reload(tmp_path):
         ["Smith,Jane", "Engineering", "25210", "49000", "511120",
          "", "", "", "VRENG", "5120001", "Widget Project",
          "", "50.00%"],
-        ["Jones,Bob", "Ops", "20152", "12001", "512120",
-         "", "", "", "VROPS", "N/A", "N/A",
+        ["Jones,Bob", "Ops", "", "", "",
+         "", "", "", "", "N/A", "N/A",
          "", "100.00%"],
     ])
     load_tsv(tsv, db)
@@ -2190,20 +2459,20 @@ def test_api_project_change_history_missing_param(main_client):
 
 
 def test_api_project_change_history_no_merges(main_client):
-    """A project with no merges returns an empty list."""
-    resp = main_client.get("/api/project-change-history?project=5120001")
+    """A budget line with no merges returns an empty list."""
+    resp = main_client.get("/api/project-change-history?budget_line=5120001")
     assert resp.status_code == 200
     assert resp.json == []
 
 
 def test_api_project_change_history_with_merge(main_client, loaded_db):
     """After a merge with changes, the change history endpoint returns them."""
-    # Create branch, make a change on project 5120001, merge
+    # Create branch, make a change on budget line 5120001, merge
     main_client.post("/api/branch/create")
     payload = main_client.get("/api/data").json
-    # Find a line for project 5120001
+    # Find a line for budget line 5120001
     line = next(r for r in payload["data"]
-                if r["Project Id"] == "5120001")
+                if r["Budget Line Code"] == "5120001")
     line_id = line["allocation_line_id"]
 
     main_client.put("/api/effort", json={
@@ -2211,7 +2480,7 @@ def test_api_project_change_history_with_merge(main_client, loaded_db):
     })
     main_client.post("/api/branch/merge")
 
-    resp = main_client.get("/api/project-change-history?project=5120001")
+    resp = main_client.get("/api/project-change-history?budget_line=5120001")
     assert resp.status_code == 200
     groups = resp.json
     assert len(groups) >= 1
@@ -2227,19 +2496,90 @@ def test_api_project_change_history_with_merge(main_client, loaded_db):
 
 
 def test_api_project_change_history_filters_by_project(main_client, loaded_db):
-    """Change history only returns changes for the requested project."""
-    # Create branch, change project 5120001, merge
+    """Change history only returns changes for the requested budget line."""
+    # Create branch, change budget line 5120001, merge
     main_client.post("/api/branch/create")
     payload = main_client.get("/api/data").json
     line = next(r for r in payload["data"]
-                if r["Project Id"] == "5120001")
+                if r["Budget Line Code"] == "5120001")
     main_client.put("/api/effort", json={
         "allocation_line_id": line["allocation_line_id"],
         "year": 2025, "month": 7, "percentage": 42.0,
     })
     main_client.post("/api/branch/merge")
 
-    # Project 5120002 should have no changes from this merge
-    resp = main_client.get("/api/project-change-history?project=5120002")
+    # Budget line 5120002 should have no changes from this merge
+    resp = main_client.get("/api/project-change-history?budget_line=5120002")
     assert resp.status_code == 200
     assert resp.json == []
+
+
+def test_budget_lines_page_returns_200(client):
+    resp = client.get("/budget-lines")
+    assert resp.status_code == 200
+
+
+def test_budget_lines_page_returns_200_on_main(main_client):
+    resp = main_client.get("/budget-lines")
+    assert resp.status_code == 200
+
+
+def test_api_update_budget_line_project_reassignment(branch_client, branch_db):
+    """Budget line can be reassigned to a different project."""
+    from sej.queries import get_budget_lines, get_projects
+
+    # Get current state
+    projects = get_projects(branch_db)
+    budget_lines = get_budget_lines(branch_db)
+    bl = next(b for b in budget_lines if b["budget_line_code"] == "5120001")
+    original_project_id = bl["project_id"]
+
+    # Find a different project to reassign to
+    other_project = next(p for p in projects if p["id"] != original_project_id)
+
+    resp = branch_client.put("/api/budget-line", json={
+        "budget_line_code": "5120001",
+        "display_name": bl["display_name"],
+        "start_year": bl["start_year"],
+        "start_month": bl["start_month"],
+        "end_year": bl["end_year"],
+        "end_month": bl["end_month"],
+        "personnel_budget": bl["personnel_budget"],
+        "project_id": other_project["id"],
+    })
+    assert resp.status_code == 200
+
+    # Verify the reassignment persisted
+    updated = get_budget_lines(branch_db)
+    updated_bl = next(b for b in updated if b["budget_line_code"] == "5120001")
+    assert updated_bl["project_id"] == other_project["id"]
+
+
+def test_api_update_budget_line_invalid_project_id(branch_client):
+    """Reassigning to a nonexistent project returns 400."""
+    resp = branch_client.put("/api/budget-line", json={
+        "budget_line_code": "5120001",
+        "project_id": 99999,
+    })
+    assert resp.status_code == 400
+    assert "Project not found" in resp.json["error"]
+
+
+def test_api_update_budget_line_without_project_id_preserves_project(branch_client, branch_db):
+    """Updating without project_id does not change the project assignment."""
+    from sej.queries import get_budget_lines
+
+    budget_lines = get_budget_lines(branch_db)
+    bl = next(b for b in budget_lines if b["budget_line_code"] == "5120001")
+    original_project_id = bl["project_id"]
+
+    resp = branch_client.put("/api/budget-line", json={
+        "budget_line_code": "5120001",
+        "display_name": "Updated Display Name",
+    })
+    assert resp.status_code == 200
+
+    updated = get_budget_lines(branch_db)
+    updated_bl = next(b for b in updated if b["budget_line_code"] == "5120001")
+    assert updated_bl["project_id"] == original_project_id
+    assert updated_bl["display_name"] == "Updated Display Name"
