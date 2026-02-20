@@ -311,10 +311,13 @@ def test_augment_splits_budget_line_into_y1_y2(tmp):
     assert y1["end_month"] == 2
     assert "Y1" in y1["display_name"]
 
-    y2 = conn.execute(
-        "SELECT * FROM budget_lines WHERE budget_line_code = '5140001-Y2'"
-    ).fetchone()
+    y2 = conn.execute("""
+        SELECT * FROM budget_lines
+        WHERE project_id = ? AND budget_line_code != '5140001'
+    """, (y1["project_id"],)).fetchone()
     assert y2 is not None
+    assert y2["budget_line_code"].isdigit()
+    assert len(y2["budget_line_code"]) == 7
     assert y2["start_year"] == 2026
     assert y2["start_month"] == 3
     assert y2["end_year"] == 2026
@@ -336,9 +339,12 @@ def test_augment_efforts_split_correctly(tmp):
     y1_bl = conn.execute(
         "SELECT id FROM budget_lines WHERE budget_line_code = '5140001'"
     ).fetchone()
-    y2_bl = conn.execute(
-        "SELECT id FROM budget_lines WHERE budget_line_code = '5140001-Y2'"
-    ).fetchone()
+    y2_bl = conn.execute("""
+        SELECT id FROM budget_lines
+        WHERE project_id = (
+            SELECT project_id FROM budget_lines WHERE budget_line_code = '5140001'
+        ) AND budget_line_code != '5140001'
+    """).fetchone()
 
     # Y1 efforts: July 2025 through Feb 2026 (months 7-12 of 2025, 1-2 of 2026)
     y1_efforts = conn.execute("""
@@ -381,9 +387,12 @@ def test_augment_sets_personnel_budgets(tmp):
     y1 = conn.execute(
         "SELECT personnel_budget FROM budget_lines WHERE budget_line_code = '5140001'"
     ).fetchone()
-    y2 = conn.execute(
-        "SELECT personnel_budget FROM budget_lines WHERE budget_line_code = '5140001-Y2'"
-    ).fetchone()
+    y2 = conn.execute("""
+        SELECT personnel_budget FROM budget_lines
+        WHERE project_id = (
+            SELECT project_id FROM budget_lines WHERE budget_line_code = '5140001'
+        ) AND budget_line_code != '5140001'
+    """).fetchone()
 
     assert y1["personnel_budget"] is not None
     assert y1["personnel_budget"] > 0

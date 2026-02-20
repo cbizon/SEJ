@@ -36,6 +36,39 @@ def _parse_percentage(value: str) -> float | None:
     return float(value.rstrip("%"))
 
 
+def _next_unused_7_digit_code(conn, preferred_after: int | None = None) -> str:
+    """Return an unused 7-digit numeric budget line code."""
+    rows = conn.execute("""
+        SELECT budget_line_code
+        FROM budget_lines
+        WHERE budget_line_code GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+    """).fetchall()
+    used = {int(r["budget_line_code"]) for r in rows}
+
+    if preferred_after is not None and 1_000_000 <= preferred_after <= 9_999_999:
+        candidate = preferred_after + 1
+    elif used:
+        candidate = max(used) + 1
+    else:
+        candidate = 1_000_000
+
+    if candidate < 1_000_000:
+        candidate = 1_000_000
+
+    while candidate <= 9_999_999:
+        if candidate not in used:
+            return str(candidate)
+        candidate += 1
+
+    candidate = 1_000_000
+    while candidate <= 9_999_999:
+        if candidate not in used:
+            return str(candidate)
+        candidate += 1
+
+    raise ValueError("No unused 7-digit budget line code available")
+
+
 def _clear_data(conn) -> None:
     """Delete all rows from all data tables in dependency order."""
     conn.execute("DELETE FROM efforts")
@@ -411,7 +444,8 @@ def augment_sample_data(db_path: str | Path) -> str | None:
     """, (f"{orig_display} — Y1", y1_bl_id))
 
     # Create Y2 budget line
-    y2_code = f"{orig_code}-Y2"
+    preferred_after = int(orig_code) if orig_code.isdigit() and len(orig_code) == 7 else None
+    y2_code = _next_unused_7_digit_code(conn, preferred_after=preferred_after)
     cur = conn.execute("""
         INSERT INTO budget_lines
             (project_id, budget_line_code, name, display_name,
