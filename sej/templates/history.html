@@ -31,11 +31,7 @@
         tr:hover td { background: #f1f3f5; }
         .action-load     { background: #d1ecf1; color: #0c5460; padding: 2px 7px; border-radius: 3px; font-size: 0.85em; }
         .action-merge    { background: #d4edda; color: #155724; padding: 2px 7px; border-radius: 3px; font-size: 0.85em; }
-        .action-branch_create  { background: #fff3cd; color: #856404; padding: 2px 7px; border-radius: 3px; font-size: 0.85em; }
-        .action-branch_delete  { background: #f8d7da; color: #721c24; padding: 2px 7px; border-radius: 3px; font-size: 0.85em; }
-        .action-revert   { background: #e2d9f3; color: #4a235a; padding: 2px 7px; border-radius: 3px; font-size: 0.85em; }
-        .tsv-link { color: #0d6efd; text-decoration: none; font-size: 0.9em; }
-        .tsv-link:hover { text-decoration: underline; }
+        .action-discard  { background: #f8d7da; color: #721c24; padding: 2px 7px; border-radius: 3px; font-size: 0.85em; }
         .empty { color: #6c757d; font-style: italic; margin-top: 2rem; }
         .changes-count { font-size: 0.85em; color: #555; }
     </style>
@@ -52,9 +48,7 @@
         const ACTION_LABELS = {
             load: "load",
             merge: "merge",
-            branch_create: "branch create",
-            branch_delete: "branch discard",
-            revert: "revert",
+            discard: "discard",
         };
 
         function formatTimestamp(ts) {
@@ -66,33 +60,22 @@
             });
         }
 
-        function tsvFilename(tsvPath) {
-            // Extract just the filename from the full path
-            return tsvPath ? tsvPath.replace(/\\/g, "/").split("/").pop() : null;
-        }
-
         function describeEntry(entry) {
             const d = entry.details;
             const action = entry.action;
             if (action === "merge") {
-                const branch = d.branch_name || "";
+                const name = d.change_set_name || "";
                 const n = d.changes_count != null ? d.changes_count : "?";
-                return `Merged branch <em>${branch}</em> &mdash; ${n} change${n === 1 ? "" : "s"}`;
+                return `Merged editing session <em>${name}</em> &mdash; ${n} change${n === 1 ? "" : "s"}`;
             }
             if (action === "load") {
-                const src = d.source_file ? tsvFilename(d.source_file) : "";
-                const rows = d.rows_loaded != null ? ` (${d.rows_loaded} rows)` : "";
-                return src ? `Loaded <em>${src}</em>${rows}` : "Data loaded";
+                const src = d.tsv_path ? d.tsv_path.replace(/\\/g, "/").split("/").pop() : "";
+                return src ? `Loaded <em>${src}</em>` : "Data loaded";
             }
-            if (action === "branch_create") {
-                return `Branch <em>${d.branch_name || ""}</em> created`;
-            }
-            if (action === "branch_delete") {
-                return `Branch <em>${d.branch_name || ""}</em> discarded`;
-            }
-            if (action === "revert") {
-                const bp = d.backup_path ? tsvFilename(d.backup_path) : "";
-                return bp ? `Reverted to backup <em>${bp}</em>` : "Reverted to backup";
+            if (action === "discard") {
+                const name = d.change_set_name || "";
+                const n = d.changes_undone != null ? d.changes_undone : "?";
+                return `Discarded editing session <em>${name}</em> &mdash; ${n} change${n === 1 ? "" : "s"} undone`;
             }
             return JSON.stringify(d);
         }
@@ -112,19 +95,10 @@
                     const ts = formatTimestamp(entry.timestamp);
                     const desc = describeEntry(entry);
 
-                    let tsvCell = "";
-                    if (entry.action === "merge" && entry.details.tsv_path) {
-                        const fname = tsvFilename(entry.details.tsv_path);
-                        if (fname) {
-                            tsvCell = `<a class="tsv-link" href="/merges/${encodeURIComponent(fname)}" download>${fname}</a>`;
-                        }
-                    }
-
                     return `<tr>
                         <td>${ts}</td>
                         <td><span class="${actionClass}">${label}</span></td>
                         <td>${desc}</td>
-                        <td>${tsvCell}</td>
                     </tr>`;
                 }).join("");
 
@@ -135,7 +109,6 @@
                                 <th>Timestamp</th>
                                 <th>Action</th>
                                 <th>Description</th>
-                                <th>Changes file</th>
                             </tr>
                         </thead>
                         <tbody>${rows}</tbody>

@@ -1,11 +1,11 @@
 """Queries that reshape the normalized database back into spreadsheet-style rows."""
 
-import csv
 import json
 import sqlite3
 from pathlib import Path
 
 from sej.db import get_connection, create_schema
+from sej.changelog import record_change
 
 
 def _discover_months(conn: sqlite3.Connection) -> list[tuple[int, int]]:
@@ -465,28 +465,37 @@ def get_budget_lines(db_path: str | Path) -> list[dict]:
     ]
 
 
-def get_branch_info(db_path: str | Path) -> dict:
-    """Return branch metadata from _meta table."""
-    conn = get_connection(db_path)
-    create_schema(conn)
-    rows = conn.execute("SELECT key, value FROM _meta").fetchall()
-    conn.close()
-    return {r["key"]: r["value"] for r in rows}
-
 
 def update_effort(db_path: str | Path, allocation_line_id: int,
-                  year: int, month: int, percentage: float | None) -> None:
+                  year: int, month: int, percentage: float | None,
+                  *, conn=None) -> None:
     """Insert or update an effort percentage. If percentage is None, delete the row.
 
     Raises ValueError if percentage is not None and the month falls outside the
     employee's active date range (start_year/start_month or end_year/end_month).
     """
-    conn = get_connection(db_path)
+    own_conn = conn is None
+    if own_conn:
+        conn = get_connection(db_path)
+
+    # Capture old value for change logging
+    old_row = conn.execute(
+        "SELECT id, percentage FROM efforts "
+        "WHERE allocation_line_id = ? AND year = ? AND month = ?",
+        (allocation_line_id, year, month),
+    ).fetchone()
+
     if percentage is None:
-        conn.execute(
-            "DELETE FROM efforts WHERE allocation_line_id = ? AND year = ? AND month = ?",
-            (allocation_line_id, year, month),
-        )
+        if old_row is not None:
+            conn.execute(
+                "DELETE FROM efforts WHERE allocation_line_id = ? AND year = ? AND month = ?",
+                (allocation_line_id, year, month),
+            )
+            record_change(conn, "efforts", "delete", old_row["id"], {
+                "allocation_line_id": allocation_line_id,
+                "year": year, "month": month,
+                "percentage": old_row["percentage"],
+            }, None)
     else:
         emp = conn.execute("""
             SELECT emp.start_year, emp.start_month, emp.end_year, emp.end_month
@@ -498,13 +507,15 @@ def update_effort(db_path: str | Path, allocation_line_id: int,
             sy, sm = emp["start_year"], emp["start_month"]
             ey, em = emp["end_year"], emp["end_month"]
             if sy is not None and sm is not None and (year, month) < (sy, sm):
-                conn.close()
+                if own_conn:
+                    conn.close()
                 raise ValueError(
                     f"Effort in {_MONTH_ABBR[month]} {year} is before employee start "
                     f"({_MONTH_ABBR[sm]} {sy})"
                 )
             if ey is not None and em is not None and (year, month) > (ey, em):
-                conn.close()
+                if own_conn:
+                    conn.close()
                 raise ValueError(
                     f"Effort in {_MONTH_ABBR[month]} {year} is after employee end "
                     f"({_MONTH_ABBR[em]} {ey})"
@@ -516,8 +527,24 @@ def update_effort(db_path: str | Path, allocation_line_id: int,
                DO UPDATE SET percentage = excluded.percentage""",
             (allocation_line_id, year, month, percentage),
         )
-    conn.commit()
-    conn.close()
+        # Get the row id (could be new or existing)
+        row = conn.execute(
+            "SELECT id FROM efforts WHERE allocation_line_id = ? AND year = ? AND month = ?",
+            (allocation_line_id, year, month),
+        ).fetchone()
+        if old_row is not None:
+            record_change(conn, "efforts", "update", row["id"],
+                          {"allocation_line_id": allocation_line_id,
+                           "percentage": old_row["percentage"]},
+                          {"allocation_line_id": allocation_line_id,
+                           "percentage": percentage})
+        else:
+            record_change(conn, "efforts", "insert", row["id"], None,
+                          {"allocation_line_id": allocation_line_id,
+                           "year": year, "month": month, "percentage": percentage})
+    if own_conn:
+        conn.commit()
+        conn.close()
 
 
 def fix_totals(db_path: str | Path) -> list[dict]:
@@ -616,8 +643,13 @@ def fix_totals(db_path: str | Path) -> list[dict]:
                         " VALUES (?, ?)",
                         (emp_id, np_budget_line["id"]),
                     )
+                    new_line_id = cur.lastrowid
+                    record_change(conn, "allocation_lines", "insert", new_line_id, None, {
+                        "employee_id": emp_id,
+                        "budget_line_id": np_budget_line["id"],
+                    })
                     conn.commit()
-                    all_np_lines = [cur.lastrowid]
+                    all_np_lines = [new_line_id]
                     np_lines_for_emp[emp_id] = all_np_lines
 
                 # Pick the NP line with the most effort this month so we
@@ -666,12 +698,15 @@ def fix_totals(db_path: str | Path) -> list[dict]:
                     })
                     excess -= cut
 
-    conn.close()
-
+    # Apply all changes in one transaction, passing conn through
     for c in changes:
         pct = c["new_percentage"]
         update_effort(db_path, c["allocation_line_id"], c["year"], c["month"],
-                      pct if pct > 0.01 else None)
+                      pct if pct > 0.01 else None, conn=conn)
+
+    # Log any allocation_line inserts that happened above
+    conn.commit()
+    conn.close()
 
     return changes
 
@@ -701,8 +736,12 @@ def add_allocation_line(db_path: str | Path, employee_name: str,
         "INSERT INTO allocation_lines (employee_id, budget_line_id) VALUES (?, ?)",
         (emp["id"], budget_line["id"]),
     )
-    conn.commit()
     line_id = cur.lastrowid
+    record_change(conn, "allocation_lines", "insert", line_id, None, {
+        "employee_id": emp["id"],
+        "budget_line_id": budget_line["id"],
+    })
+    conn.commit()
     conn.close()
     return line_id
 
@@ -732,8 +771,11 @@ def add_employee(db_path: str | Path, last_name: str, first_name: str,
         "INSERT INTO employees (name, group_id, salary) VALUES (?, ?, ?)",
         (name, group["id"], salary),
     )
-    conn.commit()
     emp_id = cur.lastrowid
+    record_change(conn, "employees", "insert", emp_id, None, {
+        "name": name, "group_id": group["id"], "salary": salary,
+    })
+    conn.commit()
     conn.close()
     return emp_id
 
@@ -749,8 +791,11 @@ def add_group(db_path: str | Path, name: str, is_internal: bool) -> int:
         "INSERT INTO groups (name, is_internal) VALUES (?, ?)",
         (name, 1 if is_internal else 0),
     )
-    conn.commit()
     group_id = cur.lastrowid
+    record_change(conn, "groups", "insert", group_id, None, {
+        "name": name, "is_internal": 1 if is_internal else 0,
+    })
+    conn.commit()
     conn.close()
     return group_id
 
@@ -932,13 +977,29 @@ def update_employee(
     _validate_employee_fields(start_year, start_month, end_year, end_month)
     conn = get_connection(db_path)
     existing = conn.execute(
-        "SELECT id FROM employees WHERE id = ?", (employee_id,)
+        "SELECT id, salary, start_year, start_month, end_year, end_month "
+        "FROM employees WHERE id = ?", (employee_id,)
     ).fetchone()
     if existing is None:
         conn.close()
         raise ValueError(f"Employee not found: {employee_id}")
     _validate_employee_dates(conn, employee_id, start_year, start_month, end_year, end_month)
+
+    old_vals = {
+        "start_year": existing["start_year"],
+        "start_month": existing["start_month"],
+        "end_year": existing["end_year"],
+        "end_month": existing["end_month"],
+    }
+    new_vals = {
+        "start_year": start_year,
+        "start_month": start_month,
+        "end_year": end_year,
+        "end_month": end_month,
+    }
     if salary is not None:
+        old_vals["salary"] = existing["salary"]
+        new_vals["salary"] = salary
         conn.execute(
             """UPDATE employees
                SET start_year = ?, start_month = ?, end_year = ?, end_month = ?,
@@ -953,6 +1014,7 @@ def update_employee(
                WHERE id = ?""",
             (start_year, start_month, end_year, end_month, employee_id),
         )
+    record_change(conn, "employees", "update", employee_id, old_vals, new_vals)
     conn.commit()
     conn.close()
 
@@ -986,6 +1048,11 @@ def add_project(
          local_pi_id, admin_group_id),
     )
     project_id = cursor.lastrowid
+    record_change(conn, "projects", "insert", project_id, None, {
+        "name": name, "start_year": start_year, "start_month": start_month,
+        "end_year": end_year, "end_month": end_month,
+        "local_pi_id": local_pi_id, "admin_group_id": admin_group_id,
+    })
     conn.commit()
     conn.close()
     return project_id
@@ -1013,7 +1080,8 @@ def update_project(
     _validate_project_fields(start_year, start_month, end_year, end_month)
     conn = get_connection(db_path)
     existing = conn.execute(
-        "SELECT id FROM projects WHERE id = ?", (project_id,)
+        "SELECT id, name, start_year, start_month, end_year, end_month, "
+        "local_pi_id, admin_group_id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
     if existing is None:
         conn.close()
@@ -1032,8 +1100,21 @@ def update_project(
         _validate_local_pi(conn, local_pi_id)
     _validate_project_dates(conn, existing["id"], start_year, start_month, end_year, end_month)
 
+    old_vals = {
+        "start_year": existing["start_year"], "start_month": existing["start_month"],
+        "end_year": existing["end_year"], "end_month": existing["end_month"],
+        "local_pi_id": existing["local_pi_id"], "admin_group_id": existing["admin_group_id"],
+    }
+    new_vals = {
+        "start_year": start_year, "start_month": start_month,
+        "end_year": end_year, "end_month": end_month,
+        "local_pi_id": local_pi_id, "admin_group_id": admin_group_id,
+    }
+
     # Build update query - always update dates and ids, optionally update name
     if name is not None:
+        old_vals["name"] = existing["name"]
+        new_vals["name"] = name
         conn.execute(
             """UPDATE projects
                SET name = ?, start_year = ?, start_month = ?,
@@ -1054,6 +1135,7 @@ def update_project(
              local_pi_id, admin_group_id, project_id),
         )
 
+    record_change(conn, "projects", "update", project_id, old_vals, new_vals)
     conn.commit()
     conn.close()
 
@@ -1172,7 +1254,7 @@ def add_budget_line(
         max_code = row["max_code"] if row["max_code"] is not None else 0
         budget_line_code = str(max_code + 1)
 
-    conn.execute(
+    cur = conn.execute(
         """INSERT INTO budget_lines
            (budget_line_code, project_id, display_name,
             start_year, start_month, end_year, end_month, personnel_budget)
@@ -1180,6 +1262,13 @@ def add_budget_line(
         (budget_line_code, project_id, display_name,
          start_year, start_month, end_year, end_month, personnel_budget),
     )
+    record_change(conn, "budget_lines", "insert", cur.lastrowid, None, {
+        "budget_line_code": budget_line_code, "project_id": project_id,
+        "display_name": display_name,
+        "start_year": start_year, "start_month": start_month,
+        "end_year": end_year, "end_month": end_month,
+        "personnel_budget": personnel_budget,
+    })
     conn.commit()
     conn.close()
     return budget_line_code
@@ -1250,11 +1339,35 @@ def update_budget_line(
         params.append(project_id)
 
     if updates:
+        # Build old/new values for change logging
+        old_vals = {}
+        new_vals = {}
+        if display_name is not None:
+            old_vals["display_name"] = existing["display_name"]
+            new_vals["display_name"] = display_name
+        if start_year is not None or start_month is not None:
+            old_vals["start_year"] = existing["start_year"]
+            old_vals["start_month"] = existing["start_month"]
+            new_vals["start_year"] = start_year
+            new_vals["start_month"] = start_month
+        if end_year is not None or end_month is not None:
+            old_vals["end_year"] = existing["end_year"]
+            old_vals["end_month"] = existing["end_month"]
+            new_vals["end_year"] = end_year
+            new_vals["end_month"] = end_month
+        if personnel_budget is not None:
+            old_vals["personnel_budget"] = existing["personnel_budget"]
+            new_vals["personnel_budget"] = personnel_budget
+        if project_id is not None:
+            old_vals["project_id"] = existing["project_id"]
+            new_vals["project_id"] = project_id
+
         params.append(budget_line_code)
         conn.execute(
             f"UPDATE budget_lines SET {', '.join(updates)} WHERE budget_line_code = ?",
             params,
         )
+        record_change(conn, "budget_lines", "update", existing["id"], old_vals, new_vals)
         conn.commit()
 
     conn.close()
@@ -1769,68 +1882,72 @@ def get_audit_log(db_path: str | Path) -> list[dict]:
 
 
 def get_project_change_history(db_path: str | Path, project_id: int) -> list[dict]:
-    """Return change history for a project from merge changelog TSVs.
+    """Return change history for a project from change_log + change_sets.
 
-    Looks up all budget_line_code values for the project, then reads audit log
-    entries where action='merge' and details has a tsv_path, filtering rows
-    where budget_line_code matches any of them.
+    Finds all merged change_sets that contain changes to efforts on
+    allocation_lines belonging to budget_lines in this project.
 
     Returns a list of change groups ordered chronologically (oldest first):
-    [{timestamp, branch_name, changes: [{type, employee, year, month, old_value, new_value}]}]
-
-    Skips TSV files that no longer exist on disk.
+    [{timestamp, change_set_name, changes: [{operation, employee, ...}]}]
     """
     conn = get_connection(db_path)
     create_schema(conn)
 
-    # Look up all budget line codes for this project
-    bl_rows = conn.execute(
-        "SELECT budget_line_code FROM budget_lines WHERE project_id = ?",
-        (project_id,),
-    ).fetchall()
-    bl_codes = {r["budget_line_code"] for r in bl_rows}
+    # Find allocation_line IDs for this project
+    al_ids = {r[0] for r in conn.execute("""
+        SELECT al.id
+        FROM allocation_lines al
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE bl.project_id = ?
+    """, (project_id,)).fetchall()}
 
-    rows = conn.execute(
-        "SELECT timestamp, details FROM audit_log WHERE action = 'merge' ORDER BY id ASC"
-    ).fetchall()
-    conn.close()
+    if not al_ids:
+        conn.close()
+        return []
 
-    merges_dir = Path(db_path).parent / "merges"
+    # Get all merged change_sets with their change_log entries for efforts
+    rows = conn.execute("""
+        SELECT cs.id AS cs_id, cs.name AS cs_name, cs.closed_at,
+               cl.table_name, cl.operation, cl.row_id,
+               cl.old_values, cl.new_values
+        FROM change_sets cs
+        JOIN change_log cl ON cl.change_set_id = cs.id
+        WHERE cs.status = 'merged'
+        AND cl.table_name = 'efforts'
+        ORDER BY cs.id ASC, cl.seq ASC
+    """).fetchall()
 
-    result = []
+    # Group by change_set and filter to relevant allocation_lines
+    cs_groups = {}
     for r in rows:
-        details = json.loads(r["details"]) if r["details"] else {}
-        tsv_path_str = details.get("tsv_path")
-        if not tsv_path_str:
+        old_vals = json.loads(r["old_values"]) if r["old_values"] else {}
+        new_vals = json.loads(r["new_values"]) if r["new_values"] else {}
+        # Check if this effort row belongs to an allocation_line in our project
+        alloc_id = new_vals.get("allocation_line_id") or old_vals.get("allocation_line_id")
+        if alloc_id is None or alloc_id not in al_ids:
             continue
 
-        tsv_path = Path(tsv_path_str).resolve()
-        if merges_dir.resolve() not in tsv_path.parents:
-            continue
-        if not tsv_path.exists():
-            continue
+        cs_id = r["cs_id"]
+        if cs_id not in cs_groups:
+            cs_groups[cs_id] = {
+                "timestamp": r["closed_at"],
+                "change_set_name": r["cs_name"],
+                "changes": [],
+            }
 
-        changes = []
-        with open(tsv_path, encoding="utf-8") as fh:
-            reader = csv.DictReader(fh, delimiter="\t")
-            for row in reader:
-                # Check both old (project_code) and new (budget_line_code) column names for compatibility
-                row_code = row.get("budget_line_code") or row.get("project_code")
-                if row_code in bl_codes:
-                    changes.append({
-                        "type": row.get("type", ""),
-                        "employee": row.get("employee", ""),
-                        "year": row.get("year", ""),
-                        "month": row.get("month", ""),
-                        "old_value": row.get("old_value", ""),
-                        "new_value": row.get("new_value", ""),
-                    })
+        # Look up employee name from allocation line
+        emp_row = conn.execute("""
+            SELECT emp.name FROM employees emp
+            JOIN allocation_lines al ON al.employee_id = emp.id
+            WHERE al.id = ?
+        """, (alloc_id,)).fetchone()
 
-        if changes:
-            result.append({
-                "timestamp": r["timestamp"],
-                "branch_name": details.get("branch_name", ""),
-                "changes": changes,
-            })
+        cs_groups[cs_id]["changes"].append({
+            "operation": r["operation"],
+            "employee": emp_row["name"] if emp_row else "",
+            "old_values": old_vals,
+            "new_values": new_vals,
+        })
 
-    return result
+    conn.close()
+    return list(cs_groups.values())

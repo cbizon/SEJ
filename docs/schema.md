@@ -12,6 +12,10 @@ lines (granular financial units with codes, dates, and budgets). The import crea
 1:1 project-to-budget-line mapping by default; users can then group budget lines under
 a shared project.
 
+Editing is done through change sets: the user opens a change set, makes edits (which
+are recorded individually in the change log), then merges (keeping changes) or discards
+(undoing all changes). This replaces the old file-copy branch system.
+
 ---
 
 ## Tables
@@ -128,33 +132,60 @@ should sum to approximately 100% for any given month.
 
 ---
 
+### `change_sets`
+
+Tracks editing sessions. A user opens a change set, makes edits, then merges
+(keeping changes) or discards (undoing all changes via the change_log).
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PK |
+| `name` | text | NOT NULL — auto-generated like `edit-20260220-143000` |
+| `status` | text | NOT NULL DEFAULT 'open' — `open`, `merged`, `discarded` |
+| `created_at` | text | NOT NULL, ISO-8601 |
+| `closed_at` | text | ISO-8601, set on merge/discard |
+
+---
+
+### `change_log`
+
+Individual edit records within a change set. Used to undo changes on discard
+and to provide detailed change history.
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| `id` | integer | PK |
+| `change_set_id` | integer | FK → change_sets.id, NOT NULL |
+| `seq` | integer | NOT NULL — monotonic within change_set, for undo ordering |
+| `table_name` | text | NOT NULL — e.g. `efforts`, `employees` |
+| `operation` | text | NOT NULL — `insert`, `update`, `delete` |
+| `row_id` | integer | NOT NULL — PK of the affected row |
+| `old_values` | text | JSON (NULL for insert) |
+| `new_values` | text | JSON (NULL for delete) |
+
+---
+
 ### `_meta`
 
-Key-value metadata about this database file. Used by the branching system to
-track whether a database is the main copy or a branch.
+Key-value metadata about this database file.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
 | `key` | text | PK |
 | `value` | text | |
 
-Known keys:
-- `db_role`: `"main"` or `"branch"`
-- `branch_name`: name of the branch (null for main)
-- `source_db`: path to the main DB this was branched from
-
 ---
 
 ### `audit_log`
 
-Records significant operations: loads, branch creation, merges, and deletions.
+Records significant operations: loads, merges, and discards.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
 | `id` | integer | PK |
 | `timestamp` | text | NOT NULL, ISO-8601 |
-| `action` | text | NOT NULL — `load`, `branch_create`, `merge`, `branch_delete`, `revert` |
-| `details` | text | JSON blob with context (branch name, TSV path, etc.) |
+| `action` | text | NOT NULL — `load`, `merge`, `discard` |
+| `details` | text | JSON blob with context (change_set name, changes count, etc.) |
 
 ---
 
@@ -167,4 +198,7 @@ groups
               ├── budget_lines (many lines may reference the same budget line)
               │     └── projects (many budget lines may reference the same project)
               └── efforts (one row per month per allocation line)
+
+change_sets
+  └── change_log (many entries per change set)
 ```

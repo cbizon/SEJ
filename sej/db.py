@@ -178,6 +178,25 @@ def create_schema(conn: sqlite3.Connection) -> None:
             action    TEXT    NOT NULL,
             details   TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS change_sets (
+            id          INTEGER PRIMARY KEY,
+            name        TEXT NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'open',
+            created_at  TEXT NOT NULL,
+            closed_at   TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS change_log (
+            id             INTEGER PRIMARY KEY,
+            change_set_id  INTEGER NOT NULL REFERENCES change_sets(id),
+            seq            INTEGER NOT NULL,
+            table_name     TEXT NOT NULL,
+            operation      TEXT NOT NULL,
+            row_id         INTEGER NOT NULL,
+            old_values     TEXT,
+            new_values     TEXT
+        );
     """)
 
     # Migration: add is_internal to groups if it doesn't exist (for older DBs)
