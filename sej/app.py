@@ -1,18 +1,23 @@
 """Flask web application for viewing and editing effort allocation data."""
 
-from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request, send_file, abort
+from flask import Flask, jsonify, render_template, request
 
-from sej.branch import create_branch, merge_branch, delete_branch, list_branches
+from sej.changelog import (
+    create_change_set,
+    merge_change_set,
+    discard_change_set,
+    get_change_set_info,
+    get_open_change_set,
+)
+from sej.db import get_connection, create_schema
 from sej.queries import (
     get_spreadsheet_rows,
     get_spreadsheet_rows_with_ids,
     get_employees,
     get_projects,
     get_budget_lines,
-    get_branch_info,
     update_effort,
     add_allocation_line,
     add_employee,
@@ -33,13 +38,20 @@ from sej.queries import (
 )
 
 
-def _resolve_db(app):
-    """Return the active DB path: the branch DB if one exists, else main."""
-    main = app.config["MAIN_DB_PATH"]
-    branches = list_branches(main)
-    if branches:
-        return branches[0]["path"]
-    return main
+def _has_open_change_set(db_path):
+    """Return True if there is an open change_set."""
+    conn = get_connection(db_path)
+    create_schema(conn)
+    result = get_open_change_set(conn) is not None
+    conn.close()
+    return result
+
+
+def _require_open_change_set(db_path):
+    """Return 403 JSON response if no open change_set, else None."""
+    if not _has_open_change_set(db_path):
+        return jsonify({"error": "Editing requires an open editing session"}), 403
+    return None
 
 
 def create_app(db_path=None):
@@ -54,8 +66,6 @@ def create_app(db_path=None):
 
     app = Flask(__name__)
     app.config["MAIN_DB_PATH"] = str(db_path)
-    # Keep DB_PATH for backwards compatibility — it's the active DB
-    app.config["DB_PATH"] = str(db_path)
 
     @app.route("/")
     def index():
@@ -63,11 +73,11 @@ def create_app(db_path=None):
 
     @app.route("/api/data")
     def api_data():
-        db = _resolve_db(app)
-        info = get_branch_info(db)
-        is_branch = info.get("db_role") == "branch"
+        db = app.config["MAIN_DB_PATH"]
+        info = get_change_set_info(db)
+        editable = info["status"] == "open"
 
-        if is_branch:
+        if editable:
             headers, rows = get_spreadsheet_rows_with_ids(db)
         else:
             headers, rows = get_spreadsheet_rows(db)
@@ -76,32 +86,32 @@ def create_app(db_path=None):
         return jsonify({
             "columns": headers,
             "data": data,
-            "editable": is_branch,
-            "branch_name": info.get("branch_name"),
+            "editable": editable,
+            "change_set_name": info.get("name"),
         })
 
-    @app.route("/api/branch")
-    def api_branch():
-        return jsonify(get_branch_info(_resolve_db(app)))
+    @app.route("/api/change-set")
+    def api_change_set():
+        return jsonify(get_change_set_info(app.config["MAIN_DB_PATH"]))
 
     @app.route("/api/employees")
     def api_employees():
-        return jsonify(get_employees(_resolve_db(app)))
+        return jsonify(get_employees(app.config["MAIN_DB_PATH"]))
 
     @app.route("/api/projects")
     def api_projects():
-        return jsonify(get_projects(_resolve_db(app)))
+        return jsonify(get_projects(app.config["MAIN_DB_PATH"]))
 
     @app.route("/api/budget-lines")
     def api_budget_lines():
-        return jsonify(get_budget_lines(_resolve_db(app)))
+        return jsonify(get_budget_lines(app.config["MAIN_DB_PATH"]))
 
     @app.route("/api/effort", methods=["PUT"])
     def api_update_effort():
-        db = _resolve_db(app)
-        info = get_branch_info(db)
-        if info.get("db_role") != "branch":
-            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+        db = app.config["MAIN_DB_PATH"]
+        guard = _require_open_change_set(db)
+        if guard:
+            return guard
 
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
@@ -128,10 +138,10 @@ def create_app(db_path=None):
 
     @app.route("/api/allocation_line", methods=["POST"])
     def api_add_allocation_line():
-        db = _resolve_db(app)
-        info = get_branch_info(db)
-        if info.get("db_role") != "branch":
-            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+        db = app.config["MAIN_DB_PATH"]
+        guard = _require_open_change_set(db)
+        if guard:
+            return guard
 
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
@@ -151,10 +161,10 @@ def create_app(db_path=None):
 
     @app.route("/api/employee", methods=["POST"])
     def api_add_employee():
-        db = _resolve_db(app)
-        info = get_branch_info(db)
-        if info.get("db_role") != "branch":
-            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+        db = app.config["MAIN_DB_PATH"]
+        guard = _require_open_change_set(db)
+        if guard:
+            return guard
 
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
@@ -177,10 +187,10 @@ def create_app(db_path=None):
 
     @app.route("/api/employee", methods=["PUT"])
     def api_update_employee():
-        db = _resolve_db(app)
-        info = get_branch_info(db)
-        if info.get("db_role") != "branch":
-            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+        db = app.config["MAIN_DB_PATH"]
+        guard = _require_open_change_set(db)
+        if guard:
+            return guard
 
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
@@ -216,10 +226,10 @@ def create_app(db_path=None):
 
     @app.route("/api/group", methods=["POST"])
     def api_add_group():
-        db = _resolve_db(app)
-        info = get_branch_info(db)
-        if info.get("db_role") != "branch":
-            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+        db = app.config["MAIN_DB_PATH"]
+        guard = _require_open_change_set(db)
+        if guard:
+            return guard
 
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
@@ -238,10 +248,10 @@ def create_app(db_path=None):
 
     @app.route("/api/project", methods=["POST"])
     def api_add_project():
-        db = _resolve_db(app)
-        info = get_branch_info(db)
-        if info.get("db_role") != "branch":
-            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+        db = app.config["MAIN_DB_PATH"]
+        guard = _require_open_change_set(db)
+        if guard:
+            return guard
 
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
@@ -266,10 +276,10 @@ def create_app(db_path=None):
 
     @app.route("/api/project", methods=["PUT"])
     def api_update_project():
-        db = _resolve_db(app)
-        info = get_branch_info(db)
-        if info.get("db_role") != "branch":
-            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+        db = app.config["MAIN_DB_PATH"]
+        guard = _require_open_change_set(db)
+        if guard:
+            return guard
 
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
@@ -298,10 +308,10 @@ def create_app(db_path=None):
 
     @app.route("/api/budget-line", methods=["POST"])
     def api_add_budget_line():
-        db = _resolve_db(app)
-        info = get_branch_info(db)
-        if info.get("db_role") != "branch":
-            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+        db = app.config["MAIN_DB_PATH"]
+        guard = _require_open_change_set(db)
+        if guard:
+            return guard
 
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
@@ -330,10 +340,10 @@ def create_app(db_path=None):
 
     @app.route("/api/budget-line", methods=["PUT"])
     def api_update_budget_line():
-        db = _resolve_db(app)
-        info = get_branch_info(db)
-        if info.get("db_role") != "branch":
-            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+        db = app.config["MAIN_DB_PATH"]
+        guard = _require_open_change_set(db)
+        if guard:
+            return guard
 
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
@@ -365,47 +375,39 @@ def create_app(db_path=None):
 
     @app.route("/api/fix-totals", methods=["POST"])
     def api_fix_totals():
-        db = _resolve_db(app)
-        info = get_branch_info(db)
-        if info.get("db_role") != "branch":
-            return jsonify({"error": "Editing is only allowed on branch databases"}), 403
+        db = app.config["MAIN_DB_PATH"]
+        guard = _require_open_change_set(db)
+        if guard:
+            return guard
         changes = fix_totals(db)
         return jsonify({"changes": changes})
 
-    @app.route("/api/branch/create", methods=["POST"])
-    def api_branch_create():
-        main = app.config["MAIN_DB_PATH"]
-        if list_branches(main):
-            return jsonify({"error": "A branch already exists. Merge or discard it first."}), 409
+    @app.route("/api/change-set/create", methods=["POST"])
+    def api_change_set_create():
+        db = app.config["MAIN_DB_PATH"]
+        try:
+            name = create_change_set(db)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 409
+        return jsonify({"name": name})
 
-        name = datetime.now(timezone.utc).strftime("edit-%Y%m%d-%H%M%S")
-        create_branch(main, name)
-        return jsonify({"branch_name": name})
+    @app.route("/api/change-set/merge", methods=["POST"])
+    def api_change_set_merge():
+        db = app.config["MAIN_DB_PATH"]
+        try:
+            changes_count = merge_change_set(db)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 409
+        return jsonify({"merged": True, "changes_count": changes_count})
 
-    @app.route("/api/branch/merge", methods=["POST"])
-    def api_branch_merge():
-        main = app.config["MAIN_DB_PATH"]
-        branches = list_branches(main)
-        if not branches:
-            return jsonify({"error": "No active branch to merge."}), 409
-
-        branch_name = branches[0]["name"]
-        tsv_path = merge_branch(main, branch_name)
-        return jsonify({
-            "merged": branch_name,
-            "changes_file": str(tsv_path) if tsv_path else None,
-        })
-
-    @app.route("/api/branch/discard", methods=["POST"])
-    def api_branch_discard():
-        main = app.config["MAIN_DB_PATH"]
-        branches = list_branches(main)
-        if not branches:
-            return jsonify({"error": "No active branch to discard."}), 409
-
-        branch_name = branches[0]["name"]
-        delete_branch(main, branch_name)
-        return jsonify({"discarded": branch_name})
+    @app.route("/api/change-set/discard", methods=["POST"])
+    def api_change_set_discard():
+        db = app.config["MAIN_DB_PATH"]
+        try:
+            discard_change_set(db)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 409
+        return jsonify({"discarded": True})
 
     @app.route("/budget-lines")
     def budget_lines_page():
@@ -439,7 +441,7 @@ def create_app(db_path=None):
 
     @app.route("/api/groups")
     def api_groups():
-        return jsonify(get_groups(_resolve_db(app)))
+        return jsonify(get_groups(app.config["MAIN_DB_PATH"]))
 
     @app.route("/api/group-details")
     def api_group_details():
@@ -487,26 +489,12 @@ def create_app(db_path=None):
         entries = get_audit_log(main)
         return jsonify(entries)
 
-    @app.route("/merges/<path:filename>")
-    def serve_merge_tsv(filename):
-        main = Path(app.config["MAIN_DB_PATH"])
-        merges_dir = main.parent / "merges"
-        tsv_path = (merges_dir / filename).resolve()
-        # Ensure the resolved path is inside merges_dir (no path traversal)
-        if merges_dir.resolve() not in tsv_path.parents:
-            abort(404)
-        if not tsv_path.exists():
-            abort(404)
-        return send_file(tsv_path, mimetype="text/tab-separated-values",
-                         as_attachment=True, download_name=tsv_path.name)
-
     return app
 
 
 def main():
     """CLI entry point: ``sej-web [DB_PATH]``."""
     import sys
-    from sej.db import get_connection
 
     # Expect at most one optional positional argument: DB_PATH
     if len(sys.argv) > 2:

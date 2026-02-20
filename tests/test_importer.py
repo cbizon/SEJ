@@ -195,8 +195,8 @@ def test_load_as_branch_bootstrap(tmp):
     assert len(employees) == 1
 
 
-def test_load_as_branch_creates_branch(tmp):
-    """Subsequent load creates a branch instead of overwriting main."""
+def test_load_as_branch_creates_change_set(tmp):
+    """Subsequent load creates a change_set and reloads in the same DB."""
     tsv = _tsv(tmp)
     db = _db(tmp)
     write_tsv(tsv, [
@@ -205,24 +205,22 @@ def test_load_as_branch_creates_branch(tmp):
     ])
     load_tsv(tsv, db)  # bootstrap
 
-    # Now do a second load via branch
+    # Now do a second load via change_set
     write_tsv(tsv, [
         ["Jones,Bob", "Ops", "20152", "12001", "512120",
          "", "", "", "VROPS", "N/A", "N/A", "100.00%", "100.00%"],
     ])
-    result = load_tsv_as_branch(tsv, db, branch_name="reload")
-    assert result != db
-    assert result.exists()
+    result = load_tsv_as_branch(tsv, db)
+    assert result == db
 
-    # Main should still have original data
+    # DB should have the new data (load_tsv wipes and reloads)
     from sej.db import get_connection
     conn = get_connection(db)
     employees = conn.execute("SELECT name FROM employees").fetchall()
     assert len(employees) == 1
-    assert employees[0]["name"] == "Smith,Jane"
+    assert employees[0]["name"] == "Jones,Bob"
 
-    # Branch should have new data
-    conn2 = get_connection(result)
-    employees2 = conn2.execute("SELECT name FROM employees").fetchall()
-    assert len(employees2) == 1
-    assert employees2[0]["name"] == "Jones,Bob"
+    # A change_set should be open
+    from sej.changelog import get_open_change_set
+    assert get_open_change_set(conn) is not None
+    conn.close()

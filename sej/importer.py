@@ -308,20 +308,21 @@ def load_tsv(tsv_path: str | Path, db_path: str | Path) -> None:
 
 def load_tsv_as_branch(tsv_path: str | Path, main_db_path: str | Path,
                        branch_name: str | None = None) -> Path:
-    """Load a TSV into a branch database for later merging.
+    """Load a TSV into the database, optionally within a change_set.
 
-    If the main DB does not exist (bootstrap), loads directly into it and
-    returns the main DB path.  Otherwise, creates a branch and loads into that.
+    If the main DB does not exist (bootstrap), loads directly into it.
+    Otherwise, creates a change_set, loads data, and leaves the change_set
+    open for review/merge.
 
     Args:
         tsv_path: Path to the input TSV file.
         main_db_path: Path to the main SQLite database.
-        branch_name: Name for the branch. Defaults to ``load_YYYYMMDD``.
+        branch_name: Ignored (kept for CLI compatibility).
 
     Returns:
-        The path to the database that was loaded into (main or branch).
+        The path to the database that was loaded into (always main_db_path).
     """
-    from sej.branch import create_branch
+    from sej.changelog import create_change_set
 
     main_db_path = Path(main_db_path)
 
@@ -330,12 +331,10 @@ def load_tsv_as_branch(tsv_path: str | Path, main_db_path: str | Path,
         load_tsv(tsv_path, main_db_path)
         return main_db_path
 
-    # Subsequent load: create branch, wipe it, load fresh
-    if branch_name is None:
-        branch_name = f"load_{datetime.now().strftime('%Y%m%d')}"
-    branch_path = create_branch(main_db_path, branch_name)
-    load_tsv(tsv_path, branch_path)
-    return branch_path
+    # Subsequent load: create a change_set, load data, leave open for review
+    create_change_set(main_db_path)
+    load_tsv(tsv_path, main_db_path)
+    return main_db_path
 
 
 def main():
