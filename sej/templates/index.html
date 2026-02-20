@@ -118,6 +118,7 @@
             <div id="col-dropdown"></div>
         </div>
         <button id="show-all-btn">Show all rows</button>
+        <button id="view-toggle-btn">Show projects view</button>
         <button id="export-btn">Export TSV</button>
         <button id="edit-data-btn" style="display:none">Edit data</button>
         <button id="select-mode-btn" style="display:none">Selection mode</button>
@@ -203,6 +204,8 @@
         let selectedCells = new Set(); // Set of "lineId|field" strings
         let selectedElements = new Map(); // "lineId|field" -> DOM element
         let isDragging = false;
+        let projectsView = false; // Toggle between lines view and projects view
+        let originalData = []; // Store original data for toggling back
 
         function applyRowFilter(table) {
             if (showAllRows) {
@@ -255,10 +258,49 @@
             updateSelectionToolbar();
         }
 
+        function rollUpToProjects(data, monthFields) {
+            // Group by Employee, Group, and Project, summing effort across budget lines
+            const grouped = {};
+            data.forEach(row => {
+                const key = `${row["Employee"]}|${row["Group"]}|${row["Project"]}`;
+                if (!grouped[key]) {
+                    grouped[key] = {
+                        "Employee": row["Employee"],
+                        "Group": row["Group"],
+                        "Project": row["Project"],
+                    };
+                    // Initialize month fields
+                    monthFields.forEach(mf => {
+                        grouped[key][mf] = 0;
+                    });
+                }
+                // Sum the effort percentages
+                monthFields.forEach(mf => {
+                    const val = row[mf];
+                    if (val !== "" && val != null) {
+                        const pct = parseFloat(String(val).replace("%", ""));
+                        if (!isNaN(pct)) {
+                            grouped[key][mf] += pct;
+                        }
+                    }
+                });
+            });
+
+            // Convert back to array and format percentages
+            return Object.values(grouped).map(row => {
+                monthFields.forEach(mf => {
+                    const val = row[mf];
+                    row[mf] = val > 0 ? `${val.toFixed(2)}%` : "";
+                });
+                return row;
+            });
+        }
+
         Promise.all([
             fetch("/api/data").then(r => r.json()),
             fetch("/api/groups").then(r => r.json()),
         ]).then(([{columns, data, editable, branch_name}, groupsList]) => {
+                originalData = data; // Store for toggling
                 const externalGroups = new Set(
                     groupsList.filter(g => !g.is_internal).map(g => g.name)
                 );
@@ -390,7 +432,7 @@
                 table.on("dataSorted", scheduleBorders);
 
                 table.on("cellEditing", (cell) => {
-                    if (selectMode) cell.cancelEdit();
+                    if (selectMode || projectsView) cell.cancelEdit();
                 });
 
                 const btn = document.getElementById("col-btn");
@@ -477,6 +519,69 @@
                 showAllBtn.addEventListener("click", () => {
                     showAllRows = !showAllRows;
                     showAllBtn.classList.toggle("active", showAllRows);
+                    applyRowFilter(table);
+                });
+
+                document.getElementById("view-toggle-btn").addEventListener("click", () => {
+                    projectsView = !projectsView;
+                    const btn = document.getElementById("view-toggle-btn");
+
+                    // If in selection mode, turn it off
+                    if (selectMode) {
+                        selectMode = false;
+                        selectModeBtn.classList.remove("active");
+                        clearSelection();
+                    }
+
+                    if (projectsView) {
+                        btn.textContent = "Show lines view";
+                        // Roll up data by projects
+                        const rolledUpData = rollUpToProjects(originalData, monthFields);
+                        table.replaceData(rolledUpData);
+
+                        // Hide budget line columns
+                        const columnsToHide = [
+                            "Budget Line Code", "Budget Line Name",
+                            "Fund Code", "Source", "Account",
+                            "Cost Code 1", "Cost Code 2", "Cost Code 3", "Program Code"
+                        ];
+                        table.getColumns().forEach(col => {
+                            if (columnsToHide.includes(col.getDefinition().title)) {
+                                col.hide();
+                            }
+                        });
+
+                        // Disable editing features in projects view
+                        if (editable) {
+                            selectModeBtn.disabled = true;
+                            selectModeBtn.style.opacity = "0.5";
+                        }
+                    } else {
+                        btn.textContent = "Show projects view";
+                        // Restore original data
+                        table.replaceData(originalData);
+
+                        // Restore column visibility based on hiddenByDefault
+                        const columnsToShow = [
+                            "Budget Line Code", "Budget Line Name"
+                        ];
+                        table.getColumns().forEach(col => {
+                            const title = col.getDefinition().title;
+                            if (columnsToShow.includes(title)) {
+                                col.show();
+                            }
+                            // Other columns stay hidden if they were in hiddenByDefault
+                        });
+
+                        // Re-enable editing features
+                        if (editable) {
+                            selectModeBtn.disabled = false;
+                            selectModeBtn.style.opacity = "1";
+                        }
+                    }
+
+                    // Recompute violations and reapply filters
+                    violations = computeViolations(table.getData(), monthFields, externalGroups);
                     applyRowFilter(table);
                 });
 
