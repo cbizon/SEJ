@@ -230,7 +230,7 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN budget_lines bl ON bl.id = al.budget_line_id\
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
         JOIN projects p ON p.id = bl.project_id
         WHERE g.name = ?
         GROUP BY emp.id, e.year, e.month
@@ -506,7 +506,7 @@ def fix_totals(db_path: str | Path) -> list[dict]:
         FROM allocation_lines al
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN budget_lines bl ON bl.id = al.budget_line_id\
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
         JOIN projects p ON p.id = bl.project_id
         WHERE p.is_nonproject = 1
         AND g.is_internal = 1
@@ -1248,7 +1248,7 @@ def get_nonproject_by_group(db_path: str | Path) -> dict:
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN budget_lines bl ON bl.id = al.budget_line_id\
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
         JOIN projects p ON p.id = bl.project_id
         WHERE g.is_internal = 1
         GROUP BY g.id, e.year, e.month
@@ -1266,7 +1266,7 @@ def get_nonproject_by_group(db_path: str | Path) -> dict:
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN budget_lines bl ON bl.id = al.budget_line_id\
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
         JOIN projects p ON p.id = bl.project_id
         WHERE g.is_internal = 1
         GROUP BY e.year, e.month
@@ -1344,7 +1344,7 @@ def get_nonproject_by_person(db_path: str | Path) -> dict:
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN budget_lines bl ON bl.id = al.budget_line_id\
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
         JOIN projects p ON p.id = bl.project_id
         WHERE g.is_internal = 1
         GROUP BY emp.id, e.year, e.month
@@ -1361,7 +1361,7 @@ def get_nonproject_by_person(db_path: str | Path) -> dict:
         JOIN allocation_lines al ON al.id = e.allocation_line_id
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
-        JOIN budget_lines bl ON bl.id = al.budget_line_id\
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
         JOIN projects p ON p.id = bl.project_id
         WHERE g.is_internal = 1
         GROUP BY e.year, e.month
