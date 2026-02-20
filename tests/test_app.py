@@ -1590,6 +1590,69 @@ def test_api_group_details_total_row_matches_group_np(main_client):
         assert total[month] == 0.0
 
 
+def test_api_group_details_no_children_for_single_budget_line(main_client):
+    # Each project in test data has only one budget line, so no _children
+    data = main_client.get("/api/group-details?group=Engineering").json
+    for proj in data["projects"]:
+        assert "_children" not in proj
+
+
+def test_api_group_details_children_for_multi_budget_line(tmp_path):
+    # Create data where one project has two budget lines
+    tsv = tmp_path / "multi_anon.tsv"
+    db = tmp_path / "multi_anon.db"
+    _write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "30.00%", "40.00%"],
+        ["", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120003", "Widget Project",
+         "20.00%", "10.00%"],
+        ["", "Engineering", "25210", "49000", "511120",
+         "", "", "", "", "5120002", "Gadget Project",
+         "50.00%", "50.00%"],
+    ])
+    load_tsv(tsv, db)
+    # Merge the two Widget budget lines under one project
+    import sqlite3
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    widget_proj = conn.execute(
+        "SELECT id FROM projects WHERE name = 'Widget Project' LIMIT 1"
+    ).fetchone()["id"]
+    conn.execute(
+        "UPDATE budget_lines SET project_id = ? WHERE budget_line_code IN ('5120001', '5120003')",
+        (widget_proj,),
+    )
+    conn.commit()
+    conn.close()
+
+    app = create_app(db_path=db)
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        data = c.get("/api/group-details?group=Engineering").json
+
+    widget = next(r for r in data["projects"] if r["project_name"] == "Widget Project")
+    # Project-level totals are sum of budget lines
+    assert abs(widget["July 2025"] - 50.0) < 0.1
+    assert abs(widget["August 2025"] - 50.0) < 0.1
+
+    # Should have _children with the two budget lines
+    assert "_children" in widget
+    assert len(widget["_children"]) == 2
+    child_names = [ch["project_name"] for ch in widget["_children"]]
+    assert len(child_names) == 2
+
+    # Each child should have month data
+    for child in widget["_children"]:
+        assert "July 2025" in child
+        assert "August 2025" in child
+
+    # Gadget has only one budget line — no _children
+    gadget = next(r for r in data["projects"] if r["project_name"] == "Gadget Project")
+    assert "_children" not in gadget
+
+
 # --- Non-Project by Person report tests ---
 
 def test_report_nonproject_by_person_page_returns_200(main_client):

@@ -255,6 +255,25 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
         ORDER BY p.name, e.year, e.month
     """, (group_name,)).fetchall()
 
+    budget_line_rows = conn.execute("""
+        SELECT
+            p.id AS project_id,
+            bl.id AS budget_line_id,
+            COALESCE(bl.display_name, bl.name) AS budget_line_name,
+            e.year,
+            e.month,
+            SUM(e.percentage) AS total_effort
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN employees emp ON emp.id = al.employee_id
+        JOIN groups g ON g.id = emp.group_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        JOIN projects p ON p.id = bl.project_id
+        WHERE g.name = ?
+        GROUP BY bl.id, e.year, e.month
+        ORDER BY COALESCE(bl.display_name, bl.name), e.year, e.month
+    """, (group_name,)).fetchall()
+
     group_total_rows = conn.execute("""
         SELECT
             e.year,
@@ -307,20 +326,42 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
     for r in project_rows:
         proj_id = r["project_id"]
         label = _month_label(r["year"], r["month"])
-        # Sum efforts if multiple months map to same project (already summed in SQL)
         project_data.setdefault(proj_id, {})[label] = r["total_effort"]
         project_info[proj_id] = {
             "project_name": r["project_name"] or "",
         }
 
+    # Per-budget-line effort (children of projects)
+    bl_data: dict[int, dict[str, float]] = {}
+    bl_info: dict[int, dict] = {}
+    for r in budget_line_rows:
+        bl_id = r["budget_line_id"]
+        label = _month_label(r["year"], r["month"])
+        bl_data.setdefault(bl_id, {})[label] = r["total_effort"]
+        bl_info[bl_id] = {
+            "project_id": r["project_id"],
+            "budget_line_name": r["budget_line_name"] or "",
+        }
+
+    # Build children grouped by project
+    project_children: dict[int, list[dict]] = {}
+    for bl_id in sorted(bl_info.keys(), key=lambda x: bl_info[x]["budget_line_name"]):
+        proj_id = bl_info[bl_id]["project_id"]
+        child: dict = {"project_name": bl_info[bl_id]["budget_line_name"]}
+        for label in month_labels:
+            child[label] = round(bl_data[bl_id].get(label, 0.0), 1)
+        project_children.setdefault(proj_id, []).append(child)
+
     projects_result: list[dict] = []
-    # Sort by project name for display
     for proj_id in sorted(project_info.keys(), key=lambda x: project_info[x]["project_name"]):
-        row = {
+        row: dict = {
             "project_name": project_info[proj_id]["project_name"],
         }
         for label in month_labels:
             row[label] = round(project_data[proj_id].get(label, 0.0), 1)
+        children = project_children.get(proj_id, [])
+        if len(children) > 1:
+            row["_children"] = children
         projects_result.append(row)
 
     return {"months": month_labels, "people": people_result, "projects": projects_result}
