@@ -11,7 +11,7 @@
         nav { margin-bottom: 0.5rem; }
         nav a { margin-right: 1rem; text-decoration: none; color: #0d6efd; }
         nav a:hover { text-decoration: underline; }
-        #branch-banner {
+        #editing-banner {
             display: none;
             background: #fff3cd;
             border: 1px solid #ffc107;
@@ -69,7 +69,7 @@
         <a href="/">Main</a>
         <a href="/reports">Reports</a>
     </nav>
-    <div id="branch-banner"></div>
+    <div id="editing-banner"></div>
     <div id="toolbar">
         <button id="edit-data-btn" style="display:none">Edit data</button>
         <button id="save-btn" style="display:none">Save changes</button>
@@ -255,7 +255,7 @@
             editable = changeSetInfo.status === "open";
 
             if (editable && changeSetInfo.name) {
-                const banner = document.getElementById("branch-banner");
+                const banner = document.getElementById("editing-banner");
                 banner.textContent = "Editing session: " + changeSetInfo.name;
                 banner.style.display = "block";
                 document.getElementById("add-budget-line-btn").style.display = "";

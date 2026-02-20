@@ -534,8 +534,10 @@ def update_effort(db_path: str | Path, allocation_line_id: int,
         ).fetchone()
         if old_row is not None:
             record_change(conn, "efforts", "update", row["id"],
-                          {"percentage": old_row["percentage"]},
-                          {"percentage": percentage})
+                          {"allocation_line_id": allocation_line_id,
+                           "percentage": old_row["percentage"]},
+                          {"allocation_line_id": allocation_line_id,
+                           "percentage": percentage})
         else:
             record_change(conn, "efforts", "insert", row["id"], None,
                           {"allocation_line_id": allocation_line_id,
@@ -1922,14 +1924,7 @@ def get_project_change_history(db_path: str | Path, project_id: int) -> list[dic
         new_vals = json.loads(r["new_values"]) if r["new_values"] else {}
         # Check if this effort row belongs to an allocation_line in our project
         alloc_id = new_vals.get("allocation_line_id") or old_vals.get("allocation_line_id")
-        if alloc_id is None:
-            # For updates, the alloc_id isn't in old/new values — look up the effort row
-            effort = conn.execute(
-                "SELECT allocation_line_id FROM efforts WHERE id = ?", (r["row_id"],)
-            ).fetchone()
-            if effort:
-                alloc_id = effort["allocation_line_id"]
-        if alloc_id not in al_ids:
+        if alloc_id is None or alloc_id not in al_ids:
             continue
 
         cs_id = r["cs_id"]

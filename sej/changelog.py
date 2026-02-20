@@ -121,8 +121,13 @@ def discard_change_set(db_path):
     # Temporarily disable FK constraints for undo ordering safety
     conn.execute("PRAGMA foreign_keys = OFF")
 
+    allowed_tables = {"efforts", "employees", "groups", "projects",
+                      "budget_lines", "allocation_lines"}
+
     for entry in entries:
         table = entry["table_name"]
+        if table not in allowed_tables:
+            raise ValueError(f"Unexpected table in change_log: {table!r}")
         op = entry["operation"]
         row_id = entry["row_id"]
         old_vals = json.loads(entry["old_values"]) if entry["old_values"] else None
