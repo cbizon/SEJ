@@ -262,12 +262,13 @@
             // Group by Employee, Group, and Project, summing effort across budget lines
             const grouped = {};
             data.forEach(row => {
-                const key = `${row["Employee"]}|${row["Group"]}|${row["Project"]}`;
+                const project = row["Project"] || "(No Project)";
+                const key = `${row["Employee"]}|${row["Group"]}|${project}`;
                 if (!grouped[key]) {
                     grouped[key] = {
                         "Employee": row["Employee"],
                         "Group": row["Group"],
-                        "Project": row["Project"],
+                        "Project": project,
                     };
                     // Initialize month fields
                     monthFields.forEach(mf => {
@@ -582,6 +583,23 @@
 
                     // Recompute violations and reapply filters
                     violations = computeViolations(table.getData(), monthFields, externalGroups);
+                    // Clear all backgrounds first
+                    table.getRows().forEach(row => {
+                        monthFields.forEach(mf => {
+                            const c = row.getCell(mf);
+                            if (c) c.getElement().style.backgroundColor = "";
+                        });
+                    });
+                    // Reapply violation highlighting
+                    table.getRows().forEach(row => {
+                        const emp = row.getData()["Employee"];
+                        monthFields.forEach(mf => {
+                            if (violations.has(`${emp}|${mf}`)) {
+                                const c = row.getCell(mf);
+                                if (c) c.getElement().style.backgroundColor = "#ffcccc";
+                            }
+                        });
+                    });
                     applyRowFilter(table);
                 });
 
