@@ -19,6 +19,17 @@ HEADER = [
 ]
 
 
+def _project_id_for(db_path, project_name):
+    """Look up the auto-generated project id by name."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT id FROM projects WHERE name = ?", (project_name,)
+    ).fetchone()
+    conn.close()
+    return row["id"]
+
+
 def _write_tsv(path: Path, rows: list[list[str]]) -> None:
     with open(path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh, delimiter="\t")
@@ -1728,23 +1739,26 @@ def test_api_project_details_missing_param(main_client):
     assert resp.status_code == 400
 
 
-def test_api_project_details_structure(main_client):
-    resp = main_client.get("/api/project-details?budget_line=5120001")
+def test_api_project_details_structure(main_client, loaded_db):
+    pid = _project_id_for(loaded_db, "Widget Project")
+    resp = main_client.get(f"/api/project-details?project_id={pid}")
     assert resp.status_code == 200
     data = resp.json
     assert "months" in data
     assert "fte_rows" in data
     assert "people" in data
+    assert "budget_line_spending" in data
 
 
-def test_api_project_details_months(main_client):
-    data = main_client.get("/api/project-details?budget_line=5120001").json
+def test_api_project_details_months(main_client, loaded_db):
+    pid = _project_id_for(loaded_db, "Widget Project")
+    data = main_client.get(f"/api/project-details?project_id={pid}").json
     assert "July 2025" in data["months"]
     assert "August 2025" in data["months"]
 
 
 def test_api_project_details_start_date_filters_months(tmp_path):
-    """Months before the budget line start date are excluded from the display."""
+    """Months before the project start date are excluded from the display."""
     tsv = tmp_path / "data_anon.tsv"
     db = tmp_path / "test_anon.db"
     _write_tsv(tsv, [
@@ -1756,18 +1770,19 @@ def test_api_project_details_start_date_filters_months(tmp_path):
          "100.00%", "100.00%"],
     ])
     load_tsv(tsv, db)
-    from sej.queries import update_budget_line
-    update_budget_line(db, "5120001", start_year=2025, start_month=8)
+    from sej.queries import update_project
+    pid = _project_id_for(db, "Widget Project")
+    update_project(db, pid, start_year=2025, start_month=8)
     app = create_app(db_path=db)
     app.config["TESTING"] = True
     with app.test_client() as c:
-        data = c.get("/api/project-details?budget_line=5120001").json
+        data = c.get(f"/api/project-details?project_id={pid}").json
     assert "July 2025" not in data["months"]
     assert "August 2025" in data["months"]
 
 
 def test_api_project_details_end_date_filters_months(tmp_path):
-    """Months after the budget line end date are excluded from the display."""
+    """Months after the project end date are excluded from the display."""
     tsv = tmp_path / "data_anon.tsv"
     db = tmp_path / "test_anon.db"
     _write_tsv(tsv, [
@@ -1779,53 +1794,60 @@ def test_api_project_details_end_date_filters_months(tmp_path):
          "100.00%", "100.00%"],
     ])
     load_tsv(tsv, db)
-    from sej.queries import update_budget_line
-    update_budget_line(db, "5120001", end_year=2025, end_month=7)
+    from sej.queries import update_project
+    pid = _project_id_for(db, "Widget Project")
+    update_project(db, pid, end_year=2025, end_month=7)
     app = create_app(db_path=db)
     app.config["TESTING"] = True
     with app.test_client() as c:
-        data = c.get("/api/project-details?budget_line=5120001").json
+        data = c.get(f"/api/project-details?project_id={pid}").json
     assert "July 2025" in data["months"]
     assert "August 2025" not in data["months"]
 
 
-def test_api_project_details_fte_label(main_client):
-    data = main_client.get("/api/project-details?budget_line=5120001").json
+def test_api_project_details_fte_label(main_client, loaded_db):
+    pid = _project_id_for(loaded_db, "Widget Project")
+    data = main_client.get(f"/api/project-details?project_id={pid}").json
     assert data["fte_rows"][0]["label"] == "Internal FTE"
 
 
-def test_api_project_details_fte_values(main_client):
-    # Smith,Jane: 50% on 5120001 in July → FTE = 0.50; 60% in August → FTE = 0.60
-    data = main_client.get("/api/project-details?budget_line=5120001").json
+def test_api_project_details_fte_values(main_client, loaded_db):
+    # Smith,Jane: 50% on Widget Project in July → FTE = 0.50; 60% in August → FTE = 0.60
+    pid = _project_id_for(loaded_db, "Widget Project")
+    data = main_client.get(f"/api/project-details?project_id={pid}").json
     internal = data["fte_rows"][0]
     assert abs(internal["July 2025"] - 0.50) < 0.01
     assert abs(internal["August 2025"] - 0.60) < 0.01
 
 
-def test_api_project_details_no_external_row_when_none(main_client):
+def test_api_project_details_no_external_row_when_none(main_client, loaded_db):
     # No external employees in the base fixture → only one FTE row
-    data = main_client.get("/api/project-details?budget_line=5120001").json
+    pid = _project_id_for(loaded_db, "Widget Project")
+    data = main_client.get(f"/api/project-details?project_id={pid}").json
     assert len(data["fte_rows"]) == 1
 
 
-def test_api_project_details_people(main_client):
-    # Only Smith,Jane works on 5120001
-    data = main_client.get("/api/project-details?budget_line=5120001").json
+def test_api_project_details_people(main_client, loaded_db):
+    # Only Smith,Jane works on Widget Project
+    pid = _project_id_for(loaded_db, "Widget Project")
+    data = main_client.get(f"/api/project-details?project_id={pid}").json
     names = [r["name"] for r in data["people"]]
     assert "Smith,Jane" in names
     assert "Jones,Bob" not in names
 
 
-def test_api_project_details_person_effort(main_client):
-    # Smith,Jane: 50% in July, 60% in August on 5120001
-    data = main_client.get("/api/project-details?budget_line=5120001").json
+def test_api_project_details_person_effort(main_client, loaded_db):
+    # Smith,Jane: 50% in July, 60% in August on Widget Project
+    pid = _project_id_for(loaded_db, "Widget Project")
+    data = main_client.get(f"/api/project-details?project_id={pid}").json
     jane = next(r for r in data["people"] if r["name"] == "Smith,Jane")
     assert abs(jane["July 2025"] - 50.0) < 0.1
     assert abs(jane["August 2025"] - 60.0) < 0.1
 
 
-def test_api_project_details_person_group(main_client):
-    data = main_client.get("/api/project-details?budget_line=5120001").json
+def test_api_project_details_person_group(main_client, loaded_db):
+    pid = _project_id_for(loaded_db, "Widget Project")
+    data = main_client.get(f"/api/project-details?project_id={pid}").json
     jane = next(r for r in data["people"] if r["name"] == "Smith,Jane")
     assert jane["group"] == "Engineering"
 
@@ -1905,9 +1927,10 @@ def test_api_add_employee_missing_json(branch_client):
     assert resp.status_code == 400
 
 
-def test_api_project_details_nonproject(main_client):
+def test_api_project_details_nonproject(main_client, loaded_db):
     # Jones,Bob is 100% Non-Project → FTE = 1.0 per month
-    data = main_client.get("/api/project-details?budget_line=Non-Project").json
+    pid = _project_id_for(loaded_db, "Non-Project")
+    data = main_client.get(f"/api/project-details?project_id={pid}").json
     internal = data["fte_rows"][0]
     assert abs(internal["July 2025"] - 1.0) < 0.01
     bob = next(r for r in data["people"] if r["name"] == "Jones,Bob")
@@ -1918,58 +1941,69 @@ def test_api_project_details_nonproject(main_client):
 
 @pytest.fixture
 def spending_client(branch_db):
-    """Branch DB with budget and end date set on budget line 5120001."""
-    from sej.queries import update_budget_line
+    """Branch DB with budget on budget line 5120001 and end date on its project."""
+    from sej.queries import update_budget_line, update_project
     # Smith,Jane: salary=120000, 50% Jul → $5000, 60% Aug → $6000
     update_budget_line(branch_db, "5120001",
                        personnel_budget=100000.0,
                        end_year=2025, end_month=9)
+    pid = _project_id_for(branch_db, "Widget Project")
+    update_project(branch_db, pid, end_year=2025, end_month=9)
     app = create_app(db_path=branch_db)
     app.config["TESTING"] = True
     with app.test_client() as c:
         yield c
 
 
-def test_spending_analysis_present(spending_client):
-    data = spending_client.get("/api/project-details?budget_line=5120001").json
+@pytest.fixture
+def spending_project_id(branch_db):
+    """Return the Widget Project id from the branch DB."""
+    return _project_id_for(branch_db, "Widget Project")
+
+
+def test_spending_analysis_present(spending_client, spending_project_id):
+    data = spending_client.get(f"/api/project-details?project_id={spending_project_id}").json
     assert data["spending_analysis"] is not None
     assert len(data["spending_analysis"]) > 0
 
 
-def test_spending_analysis_absent_without_budget(main_client):
-    data = main_client.get("/api/project-details?budget_line=5120001").json
+def test_spending_analysis_absent_without_budget(main_client, loaded_db):
+    pid = _project_id_for(loaded_db, "Widget Project")
+    data = main_client.get(f"/api/project-details?project_id={pid}").json
     assert data["spending_analysis"] is None
 
 
-def test_spending_analysis_values(spending_client):
+def test_spending_analysis_values(spending_client, spending_project_id):
     # Jul: 120000/12 * 0.50 = 5000 → remaining 95000
     # Aug: 120000/12 * 0.60 = 6000 → remaining 89000
     # Sep: extrapolated at 6000  → remaining 83000
-    data = spending_client.get("/api/project-details?budget_line=5120001").json
+    data = spending_client.get(f"/api/project-details?project_id={spending_project_id}").json
     points = {p["month"]: p["remaining"] for p in data["spending_analysis"]}
     assert abs(points["July 2025"] - 95000.0) < 1.0
     assert abs(points["August 2025"] - 89000.0) < 1.0
     assert abs(points["September 2025"] - 83000.0) < 1.0
 
 
-def test_spending_analysis_covers_to_end(spending_client):
-    data = spending_client.get("/api/project-details?budget_line=5120001").json
+def test_spending_analysis_covers_to_end(spending_client, spending_project_id):
+    data = spending_client.get(f"/api/project-details?project_id={spending_project_id}").json
     months = [p["month"] for p in data["spending_analysis"]]
     assert months[-1] == "September 2025"
 
 
 def test_spending_analysis_start_date_respected(branch_db):
-    """Chart starts at budget line start date with $0 spend for pre-effort months."""
-    from sej.queries import update_budget_line
+    """Chart starts at project start date with $0 spend for pre-effort months."""
+    from sej.queries import update_budget_line, update_project
+    pid = _project_id_for(branch_db, "Widget Project")
     # Start in May 2025 — two months before the first effort (July 2025)
     update_budget_line(branch_db, "5120001",
-                       start_year=2025, start_month=5,
                        personnel_budget=100000.0,
                        end_year=2025, end_month=8)
+    update_project(branch_db, pid, start_year=2025, start_month=5,
+                   end_year=2025, end_month=8)
     app = create_app(db_path=branch_db)
     app.config["TESTING"] = True
     with app.test_client() as c:
-        data = c.get("/api/project-details?budget_line=5120001").json
+        data = c.get(f"/api/project-details?project_id={pid}").json
     points = {p["month"]: p["remaining"] for p in data["spending_analysis"]}
     # May and June have no effort → $0 spend → budget stays at 100000
     assert abs(points["May 2025"] - 100000.0) < 1.0
@@ -1979,19 +2013,41 @@ def test_spending_analysis_start_date_respected(branch_db):
 
 
 def test_spending_analysis_zero_spend_within_range(branch_db):
-    """Months within the data range with no effort for this budget line contribute $0."""
-    from sej.queries import update_budget_line
+    """Months within the data range with no effort for this project contribute $0."""
+    from sej.queries import update_budget_line, update_project
+    pid = _project_id_for(branch_db, "Gadget Project")
     update_budget_line(branch_db, "5120002",
                        personnel_budget=80000.0,
                        end_year=2025, end_month=9)
+    update_project(branch_db, pid, end_year=2025, end_month=9)
     app = create_app(db_path=branch_db)
     app.config["TESTING"] = True
     with app.test_client() as c:
-        data = c.get("/api/project-details?budget_line=5120002").json
+        data = c.get(f"/api/project-details?project_id={pid}").json
     points = {p["month"]: p["remaining"] for p in data["spending_analysis"]}
     assert abs(points["July 2025"] - 75000.0) < 1.0   # 80000 - 5000
     assert abs(points["August 2025"] - 71000.0) < 1.0  # 75000 - 4000
     assert abs(points["September 2025"] - 67000.0) < 1.0  # extrapolate Aug rate
+
+
+def test_budget_line_spending_in_project_details(branch_db):
+    """Per-budget-line spending is returned alongside project-level spending."""
+    from sej.queries import update_budget_line, update_project
+    pid = _project_id_for(branch_db, "Widget Project")
+    update_budget_line(branch_db, "5120001",
+                       personnel_budget=100000.0,
+                       end_year=2025, end_month=9)
+    update_project(branch_db, pid, end_year=2025, end_month=9)
+    app = create_app(db_path=branch_db)
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        data = c.get(f"/api/project-details?project_id={pid}").json
+    assert "budget_line_spending" in data
+    assert len(data["budget_line_spending"]) >= 1
+    bl = data["budget_line_spending"][0]
+    assert "name" in bl
+    assert bl["spending_analysis"] is not None
+    assert len(bl["spending_analysis"]) > 0
 
 
 # --- Add group tests ---
@@ -2117,26 +2173,29 @@ def test_nonproject_by_person_total_excludes_external(external_group_client):
 
 # --- Project details external FTE row ---
 
-def test_api_project_details_external_fte_row_present(external_group_client):
+def test_api_project_details_external_fte_row_present(external_group_client, external_group_db):
     # external_group_db: Smith,Jane (internal, 100%) and External,Person (external, 50%)
-    # both on budget line 5120001 in July 2025
-    data = external_group_client.get("/api/project-details?budget_line=5120001").json
+    # both on Widget Project in July 2025
+    pid = _project_id_for(external_group_db, "Widget Project")
+    data = external_group_client.get(f"/api/project-details?project_id={pid}").json
     labels = [r["label"] for r in data["fte_rows"]]
     assert "Internal FTE" in labels
     assert "External FTE" in labels
 
 
-def test_api_project_details_external_fte_values(external_group_client):
-    data = external_group_client.get("/api/project-details?budget_line=5120001").json
+def test_api_project_details_external_fte_values(external_group_client, external_group_db):
+    pid = _project_id_for(external_group_db, "Widget Project")
+    data = external_group_client.get(f"/api/project-details?project_id={pid}").json
     internal = next(r for r in data["fte_rows"] if r["label"] == "Internal FTE")
     external = next(r for r in data["fte_rows"] if r["label"] == "External FTE")
     assert abs(internal["July 2025"] - 1.0) < 0.01
     assert abs(external["July 2025"] - 0.50) < 0.01
 
 
-def test_api_project_details_external_fte_row_absent_when_no_external(main_client):
+def test_api_project_details_external_fte_row_absent_when_no_external(main_client, loaded_db):
     # Base fixture has no external employees
-    data = main_client.get("/api/project-details?budget_line=5120001").json
+    pid = _project_id_for(loaded_db, "Widget Project")
+    data = main_client.get(f"/api/project-details?project_id={pid}").json
     labels = [r["label"] for r in data["fte_rows"]]
     assert "External FTE" not in labels
 
@@ -2521,15 +2580,17 @@ def test_api_project_change_history_missing_param(main_client):
     assert resp.status_code == 400
 
 
-def test_api_project_change_history_no_merges(main_client):
-    """A budget line with no merges returns an empty list."""
-    resp = main_client.get("/api/project-change-history?budget_line=5120001")
+def test_api_project_change_history_no_merges(main_client, loaded_db):
+    """A project with no merges returns an empty list."""
+    pid = _project_id_for(loaded_db, "Widget Project")
+    resp = main_client.get(f"/api/project-change-history?project_id={pid}")
     assert resp.status_code == 200
     assert resp.json == []
 
 
 def test_api_project_change_history_with_merge(main_client, loaded_db):
     """After a merge with changes, the change history endpoint returns them."""
+    pid = _project_id_for(loaded_db, "Widget Project")
     # Create branch, make a change on budget line 5120001, merge
     main_client.post("/api/branch/create")
     payload = main_client.get("/api/data").json
@@ -2543,7 +2604,7 @@ def test_api_project_change_history_with_merge(main_client, loaded_db):
     })
     main_client.post("/api/branch/merge")
 
-    resp = main_client.get("/api/project-change-history?budget_line=5120001")
+    resp = main_client.get(f"/api/project-change-history?project_id={pid}")
     assert resp.status_code == 200
     groups = resp.json
     assert len(groups) >= 1
@@ -2559,8 +2620,10 @@ def test_api_project_change_history_with_merge(main_client, loaded_db):
 
 
 def test_api_project_change_history_filters_by_project(main_client, loaded_db):
-    """Change history only returns changes for the requested budget line."""
-    # Create branch, change budget line 5120001, merge
+    """Change history only returns changes for the requested project."""
+    pid_widget = _project_id_for(loaded_db, "Widget Project")
+    pid_gadget = _project_id_for(loaded_db, "Gadget Project")
+    # Create branch, change budget line 5120001 (Widget Project), merge
     main_client.post("/api/branch/create")
     payload = main_client.get("/api/data").json
     line = next(r for r in payload["data"]
@@ -2571,8 +2634,8 @@ def test_api_project_change_history_filters_by_project(main_client, loaded_db):
     })
     main_client.post("/api/branch/merge")
 
-    # Budget line 5120002 should have no changes from this merge
-    resp = main_client.get("/api/project-change-history?budget_line=5120002")
+    # Gadget Project should have no changes from this merge
+    resp = main_client.get(f"/api/project-change-history?project_id={pid_gadget}")
     assert resp.status_code == 200
     assert resp.json == []
 

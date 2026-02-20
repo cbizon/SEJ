@@ -15,6 +15,7 @@
         .controls label { font-weight: 600; }
         .controls select { padding: 4px 8px; font-size: 1em; }
         h2 { margin: 1.25rem 0 0.4rem; font-size: 1.05em; color: #343a40; }
+        h3 { margin: 1rem 0 0.3rem; font-size: 0.95em; color: #495057; }
         .toolbar { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
         .col-picker { position: relative; display: inline-block; }
         .col-dropdown {
@@ -46,13 +47,15 @@
         #project-info dd { margin: 0; }
         #people-table .tabulator-tableholder { padding-bottom: 17px; }
         #spending-section { display: none; margin-top: 1.5rem; }
-        #spending-chart-wrap {
+        .spending-chart-wrap {
             background: #fff;
             border: 1px solid #dee2e6;
             border-radius: 4px;
             padding: 1rem;
             max-width: 900px;
+            margin-bottom: 1rem;
         }
+        #bl-spending-section { display: none; margin-top: 1.5rem; }
         #history-section { display: none; margin-top: 1.5rem; }
         .history-group {
             background: #fff;
@@ -87,18 +90,18 @@
     </style>
 </head>
 <body>
-    <h1>Budget Line Details</h1>
+    <h1>Project Details</h1>
     <nav><a href="/reports">&larr; Reports</a></nav>
 
     <div class="controls">
-        <label for="project-select">Budget Line:</label>
+        <label for="project-select">Project:</label>
         <select id="project-select">
             <option value="">Loading&hellip;</option>
         </select>
     </div>
 
     <div id="error"></div>
-    <p id="project-placeholder">Select a budget line above.</p>
+    <p id="project-placeholder">Select a project above.</p>
 
     <div id="project-info">
         <dl id="project-info-dl"></dl>
@@ -128,9 +131,14 @@
 
     <div id="spending-section">
         <h2>Remaining Personnel Budget</h2>
-        <div id="spending-chart-wrap">
+        <div class="spending-chart-wrap">
             <canvas id="spending-chart"></canvas>
         </div>
+    </div>
+
+    <div id="bl-spending-section">
+        <h2>Per-Budget-Line Spending</h2>
+        <div id="bl-spending-content"></div>
     </div>
 
     <div id="history-section">
@@ -143,6 +151,7 @@
         let fteTable = null;
         let peopleTable = null;
         let spendingChart = null;
+        let blCharts = [];
 
         function fteFormatter(cell) {
             const v = cell.getValue();
@@ -285,26 +294,10 @@
             });
         }
 
-        function showSpendingChart(data) {
-            const section = document.getElementById("spending-section");
-            if (!data || data.length === 0) {
-                section.style.display = "none";
-                return;
-            }
-            section.style.display = "block";
-
+        function createSpendingChart(canvas, data) {
             const labels = data.map(d => d.month);
             const values = data.map(d => d.remaining);
-
-            if (spendingChart) {
-                spendingChart.data.labels = labels;
-                spendingChart.data.datasets[0].data = values;
-                spendingChart.update();
-                return;
-            }
-
-            const ctx = document.getElementById("spending-chart").getContext("2d");
-            spendingChart = new Chart(ctx, {
+            return new Chart(canvas.getContext("2d"), {
                 type: "line",
                 data: {
                     labels,
@@ -338,6 +331,56 @@
                         },
                     },
                 },
+            });
+        }
+
+        function showSpendingChart(data) {
+            const section = document.getElementById("spending-section");
+            if (!data || data.length === 0) {
+                section.style.display = "none";
+                return;
+            }
+            section.style.display = "block";
+
+            if (spendingChart) {
+                spendingChart.data.labels = data.map(d => d.month);
+                spendingChart.data.datasets[0].data = data.map(d => d.remaining);
+                spendingChart.update();
+                return;
+            }
+
+            spendingChart = createSpendingChart(document.getElementById("spending-chart"), data);
+        }
+
+        function showBudgetLineSpending(blSpending) {
+            const section = document.getElementById("bl-spending-section");
+            const content = document.getElementById("bl-spending-content");
+
+            // Destroy old charts
+            blCharts.forEach(c => c.destroy());
+            blCharts = [];
+            content.innerHTML = "";
+
+            // Only show BLs that have spending analysis data
+            const withData = (blSpending || []).filter(bl => bl.spending_analysis && bl.spending_analysis.length > 0);
+            if (withData.length === 0) {
+                section.style.display = "none";
+                return;
+            }
+            section.style.display = "block";
+
+            withData.forEach(bl => {
+                const heading = document.createElement("h3");
+                heading.textContent = bl.name;
+                content.appendChild(heading);
+
+                const wrap = document.createElement("div");
+                wrap.className = "spending-chart-wrap";
+                const canvas = document.createElement("canvas");
+                wrap.appendChild(canvas);
+                content.appendChild(wrap);
+
+                blCharts.push(createSpendingChart(canvas, bl.spending_analysis));
             });
         }
 
@@ -375,18 +418,25 @@
             el.style.display = "";
         }
 
-        function loadProject(budgetLine) {
+        function loadProject(projectId) {
             document.getElementById("error").style.display = "none";
-            if (!budgetLine) { showProjectInfo(null); showSpendingChart(null); showChangeHistory(null); return; }
+            if (!projectId) {
+                showProjectInfo(null);
+                showSpendingChart(null);
+                showBudgetLineSpending(null);
+                showChangeHistory(null);
+                return;
+            }
 
-            fetch(`/api/project-details?budget_line=${encodeURIComponent(budgetLine)}`)
+            fetch(`/api/project-details?project_id=${encodeURIComponent(projectId)}`)
                 .then(r => {
                     if (!r.ok) return r.text().then(t => { throw new Error(`Server error ${r.status}: ${t}`); });
                     return r.json();
                 })
-                .then(({ months, fte_rows, people, project_info, spending_analysis }) => {
+                .then(({ months, fte_rows, people, project_info, spending_analysis, budget_line_spending }) => {
                     showProjectInfo(project_info);
                     showSpendingChart(spending_analysis);
+                    showBudgetLineSpending(budget_line_spending);
                     if (fteTable === null) {
                         initTables(months, fte_rows, people);
                     } else {
@@ -396,7 +446,7 @@
                 })
                 .catch(err => showError(err.message));
 
-            fetch(`/api/project-change-history?budget_line=${encodeURIComponent(budgetLine)}`)
+            fetch(`/api/project-change-history?project_id=${encodeURIComponent(projectId)}`)
                 .then(r => {
                     if (!r.ok) return r.text().then(t => { throw new Error(`Server error ${r.status}: ${t}`); });
                     return r.json();
@@ -405,20 +455,20 @@
                 .catch(err => showError(err.message));
         }
 
-        fetch("/api/budget-lines")
+        fetch("/api/projects")
             .then(r => r.json())
-            .then(budgetLines => {
+            .then(projects => {
                 const sel = document.getElementById("project-select");
-                sel.innerHTML = '<option value="">-- select a budget line --</option>';
-                budgetLines.forEach(bl => {
+                sel.innerHTML = '<option value="">-- select a project --</option>';
+                projects.forEach(p => {
                     const opt = document.createElement("option");
-                    opt.value = bl.budget_line_code;
-                    opt.textContent = bl.budget_line_code + (bl.name ? " — " + bl.name : "");
+                    opt.value = p.id;
+                    opt.textContent = p.name;
                     sel.appendChild(opt);
                 });
-                if (budgetLines.length === 1) {
-                    sel.value = budgetLines[0].budget_line_code;
-                    loadProject(budgetLines[0].budget_line_code);
+                if (projects.length === 1) {
+                    sel.value = projects[0].id;
+                    loadProject(projects[0].id);
                 }
             });
 

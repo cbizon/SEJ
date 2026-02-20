@@ -456,18 +456,18 @@ def create_app(db_path=None):
     @app.route("/api/project-details")
     def api_project_details():
         main = app.config["MAIN_DB_PATH"]
-        budget_line = request.args.get("budget_line", "")
-        if not budget_line:
-            return jsonify({"error": "Missing required parameter: budget_line"}), 400
-        return jsonify(get_project_details(main, budget_line))
+        project_id = request.args.get("project_id", "")
+        if not project_id:
+            return jsonify({"error": "Missing required parameter: project_id"}), 400
+        return jsonify(get_project_details(main, int(project_id)))
 
     @app.route("/api/project-change-history")
     def api_project_change_history():
         main = app.config["MAIN_DB_PATH"]
-        budget_line = request.args.get("budget_line", "")
-        if not budget_line:
-            return jsonify({"error": "Missing required parameter: budget_line"}), 400
-        return jsonify(get_project_change_history(main, budget_line))
+        project_id = request.args.get("project_id", "")
+        if not project_id:
+            return jsonify({"error": "Missing required parameter: project_id"}), 400
+        return jsonify(get_project_change_history(main, int(project_id)))
 
     @app.route("/history")
     def history():

@@ -1506,32 +1506,99 @@ def _compute_spending_analysis(
     return result
 
 
-def get_project_details(db_path: str | Path, budget_line: str) -> dict:
-    """Return total FTE and per-person effort for a budget line by month.
+def _compute_project_spending_analysis(
+    conn: sqlite3.Connection,
+    project_id: int,
+    total_budget: float,
+    start_year: int | None,
+    start_month: int | None,
+    end_year: int,
+    end_month: int,
+) -> list[dict] | None:
+    """Compute remaining personnel budget at end of each month for a whole project.
+
+    Sums costs across all budget lines in the project. Same logic as
+    _compute_spending_analysis but aggregates at the project level.
+    """
+    effort_rows = conn.execute("""
+        SELECT e.year, e.month,
+               SUM(emp.salary / 12.0 * e.percentage / 100.0) AS monthly_cost
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN employees emp ON emp.id = al.employee_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE bl.project_id = ?
+        GROUP BY e.year, e.month
+        ORDER BY e.year, e.month
+    """, (project_id,)).fetchall()
+
+    costs = {(r["year"], r["month"]): r["monthly_cost"] for r in effort_rows}
+
+    last_row = conn.execute(
+        "SELECT year, month FROM efforts ORDER BY year DESC, month DESC LIMIT 1"
+    ).fetchone()
+    data_end = (last_row["year"], last_row["month"]) if last_row else None
+
+    if start_year is not None and start_month is not None:
+        chart_start = (start_year, start_month)
+    elif effort_rows:
+        chart_start = (effort_rows[0]["year"], effort_rows[0]["month"])
+    else:
+        return None
+
+    extrapolate_cost = costs.get(data_end, 0.0) if data_end else 0.0
+
+    result = []
+    remaining = total_budget
+    y, m = chart_start
+    while (y, m) <= (end_year, end_month):
+        if data_end is None or (y, m) <= data_end:
+            cost = costs.get((y, m), 0.0)
+        else:
+            cost = extrapolate_cost
+        remaining -= cost
+        result.append({"month": _month_label(y, m), "remaining": round(remaining, 2)})
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+
+    return result
+
+
+def get_project_details(db_path: str | Path, project_id: int) -> dict:
+    """Return total FTE and per-person effort for a project by month.
 
     Returns a dict with:
-        months:            list of month label strings in chronological order
-        fte_rows:          [{label, <month>: fte_value, ...}, ...]
-        people:            list of {name, group, <month>: effort_pct, ...} sorted by name
-        project_info:      dict with name, start, end, local_pi_name, personnel_budget,
-                           admin_group_name (all optional fields are None when not set)
-        spending_analysis: list of {month, remaining} or None if budget/end not set
+        months:               list of month label strings in chronological order
+        fte_rows:             [{label, <month>: fte_value, ...}, ...]
+        people:               list of {name, group, <month>: effort_pct, ...} sorted by name
+        project_info:         dict with name, start, end, local_pi_name, personnel_budget
+                              (summed across budget lines), admin_group_name
+        spending_analysis:    list of {month, remaining} or None — project-level
+        budget_line_spending: list of {name, spending_analysis} — per-budget-line
     """
     conn = get_connection(db_path)
     create_schema(conn)
     months = _discover_months(conn)
 
     proj_row = conn.execute("""
-        SELECT bl.id, COALESCE(bl.display_name, bl.name) AS name,
-               bl.start_year, bl.start_month, bl.end_year, bl.end_month,
-               e.name AS local_pi_name, bl.personnel_budget,
+        SELECT p.id, p.name,
+               p.start_year, p.start_month, p.end_year, p.end_month,
+               e.name AS local_pi_name,
                g.name AS admin_group_name
-        FROM budget_lines bl
-        JOIN projects p ON p.id = bl.project_id
+        FROM projects p
         LEFT JOIN employees e ON e.id = p.local_pi_id
         LEFT JOIN groups g ON g.id = p.admin_group_id
-        WHERE bl.budget_line_code = ?
-    """, (budget_line,)).fetchone()
+        WHERE p.id = ?
+    """, (project_id,)).fetchone()
+
+    # Sum personnel_budget across all budget lines for this project
+    budget_sum_row = conn.execute("""
+        SELECT SUM(personnel_budget) AS total_budget
+        FROM budget_lines WHERE project_id = ?
+    """, (project_id,)).fetchone()
+    total_budget = budget_sum_row["total_budget"] if budget_sum_row else None
 
     if proj_row is not None:
         sy, sm = proj_row["start_year"], proj_row["start_month"]
@@ -1554,15 +1621,14 @@ def get_project_details(db_path: str | Path, budget_line: str) -> dict:
             "start": _period(proj_row["start_year"], proj_row["start_month"]),
             "end": _period(proj_row["end_year"], proj_row["end_month"]),
             "local_pi_name": proj_row["local_pi_name"],
-            "personnel_budget": proj_row["personnel_budget"],
+            "personnel_budget": total_budget,
             "admin_group_name": proj_row["admin_group_name"],
         }
-        budget = proj_row["personnel_budget"]
         end_y = proj_row["end_year"]
         end_m = proj_row["end_month"]
-        if budget is not None and end_y is not None and end_m is not None:
-            spending_analysis = _compute_spending_analysis(
-                conn, proj_row["id"], budget,
+        if total_budget is not None and end_y is not None and end_m is not None:
+            spending_analysis = _compute_project_spending_analysis(
+                conn, project_id, total_budget,
                 proj_row["start_year"], proj_row["start_month"],
                 end_y, end_m,
             )
@@ -1574,10 +1640,10 @@ def get_project_details(db_path: str | Path, budget_line: str) -> dict:
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
         JOIN budget_lines bl ON bl.id = al.budget_line_id
-        WHERE bl.budget_line_code = ? AND g.is_internal = 1
+        WHERE bl.project_id = ? AND g.is_internal = 1
         GROUP BY e.year, e.month
         ORDER BY e.year, e.month
-    """, (budget_line,)).fetchall()
+    """, (project_id,)).fetchall()
 
     external_fte_rows = conn.execute("""
         SELECT e.year, e.month, SUM(e.percentage) / 100.0 AS total_fte
@@ -1586,10 +1652,10 @@ def get_project_details(db_path: str | Path, budget_line: str) -> dict:
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
         JOIN budget_lines bl ON bl.id = al.budget_line_id
-        WHERE bl.budget_line_code = ? AND g.is_internal = 0
+        WHERE bl.project_id = ? AND g.is_internal = 0
         GROUP BY e.year, e.month
         ORDER BY e.year, e.month
-    """, (budget_line,)).fetchall()
+    """, (project_id,)).fetchall()
 
     person_rows = conn.execute("""
         SELECT
@@ -1603,10 +1669,34 @@ def get_project_details(db_path: str | Path, budget_line: str) -> dict:
         JOIN employees emp ON emp.id = al.employee_id
         JOIN groups g ON g.id = emp.group_id
         JOIN budget_lines bl ON bl.id = al.budget_line_id
-        WHERE bl.budget_line_code = ?
+        WHERE bl.project_id = ?
         GROUP BY emp.id, e.year, e.month
         ORDER BY emp.name, e.year, e.month
-    """, (budget_line,)).fetchall()
+    """, (project_id,)).fetchall()
+
+    # Per-budget-line spending analysis
+    bl_rows = conn.execute("""
+        SELECT id, COALESCE(display_name, name) AS bl_name,
+               personnel_budget, start_year, start_month, end_year, end_month
+        FROM budget_lines WHERE project_id = ?
+        ORDER BY COALESCE(display_name, name)
+    """, (project_id,)).fetchall()
+
+    budget_line_spending = []
+    for bl in bl_rows:
+        bl_analysis = None
+        if (bl["personnel_budget"] is not None
+                and bl["end_year"] is not None and bl["end_month"] is not None):
+            bl_analysis = _compute_spending_analysis(
+                conn, bl["id"], bl["personnel_budget"],
+                bl["start_year"], bl["start_month"],
+                bl["end_year"], bl["end_month"],
+            )
+        budget_line_spending.append({
+            "name": bl["bl_name"],
+            "spending_analysis": bl_analysis,
+        })
+
     conn.close()
 
     month_labels = [_month_label(y, m) for y, m in months]
@@ -1651,6 +1741,7 @@ def get_project_details(db_path: str | Path, budget_line: str) -> dict:
         "people": people_result,
         "project_info": project_info,
         "spending_analysis": spending_analysis,
+        "budget_line_spending": budget_line_spending,
     }
 
 
@@ -1677,11 +1768,12 @@ def get_audit_log(db_path: str | Path) -> list[dict]:
     return result
 
 
-def get_project_change_history(db_path: str | Path, budget_line_code: str) -> list[dict]:
-    """Return change history for a budget line from merge changelog TSVs.
+def get_project_change_history(db_path: str | Path, project_id: int) -> list[dict]:
+    """Return change history for a project from merge changelog TSVs.
 
-    Reads audit log entries where action='merge' and details has a tsv_path,
-    then reads each TSV and filters rows where budget_line_code matches.
+    Looks up all budget_line_code values for the project, then reads audit log
+    entries where action='merge' and details has a tsv_path, filtering rows
+    where budget_line_code matches any of them.
 
     Returns a list of change groups ordered chronologically (oldest first):
     [{timestamp, branch_name, changes: [{type, employee, year, month, old_value, new_value}]}]
@@ -1690,6 +1782,14 @@ def get_project_change_history(db_path: str | Path, budget_line_code: str) -> li
     """
     conn = get_connection(db_path)
     create_schema(conn)
+
+    # Look up all budget line codes for this project
+    bl_rows = conn.execute(
+        "SELECT budget_line_code FROM budget_lines WHERE project_id = ?",
+        (project_id,),
+    ).fetchall()
+    bl_codes = {r["budget_line_code"] for r in bl_rows}
+
     rows = conn.execute(
         "SELECT timestamp, details FROM audit_log WHERE action = 'merge' ORDER BY id ASC"
     ).fetchall()
@@ -1716,7 +1816,7 @@ def get_project_change_history(db_path: str | Path, budget_line_code: str) -> li
             for row in reader:
                 # Check both old (project_code) and new (budget_line_code) column names for compatibility
                 row_code = row.get("budget_line_code") or row.get("project_code")
-                if row_code == budget_line_code:
+                if row_code in bl_codes:
                     changes.append({
                         "type": row.get("type", ""),
                         "employee": row.get("employee", ""),
