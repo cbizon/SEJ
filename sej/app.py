@@ -456,18 +456,26 @@ def create_app(db_path=None):
     @app.route("/api/project-details")
     def api_project_details():
         main = app.config["MAIN_DB_PATH"]
-        project_id = request.args.get("project_id", "")
-        if not project_id:
+        project_id_str = request.args.get("project_id", "")
+        if not project_id_str:
             return jsonify({"error": "Missing required parameter: project_id"}), 400
-        return jsonify(get_project_details(main, int(project_id)))
+        try:
+            project_id = int(project_id_str)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid project_id: must be an integer"}), 400
+        return jsonify(get_project_details(main, project_id))
 
     @app.route("/api/project-change-history")
     def api_project_change_history():
         main = app.config["MAIN_DB_PATH"]
-        project_id = request.args.get("project_id", "")
-        if not project_id:
+        project_id_str = request.args.get("project_id", "")
+        if not project_id_str:
             return jsonify({"error": "Missing required parameter: project_id"}), 400
-        return jsonify(get_project_change_history(main, int(project_id)))
+        try:
+            project_id = int(project_id_str)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid project_id: must be an integer"}), 400
+        return jsonify(get_project_change_history(main, project_id))
 
     @app.route("/history")
     def history():

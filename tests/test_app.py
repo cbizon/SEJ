@@ -1739,6 +1739,18 @@ def test_api_project_details_missing_param(main_client):
     assert resp.status_code == 400
 
 
+def test_api_project_details_invalid_id(main_client):
+    resp = main_client.get("/api/project-details?project_id=abc")
+    assert resp.status_code == 400
+    assert "integer" in resp.json["error"]
+
+
+def test_api_project_change_history_invalid_id(main_client):
+    resp = main_client.get("/api/project-change-history?project_id=abc")
+    assert resp.status_code == 400
+    assert "integer" in resp.json["error"]
+
+
 def test_api_project_details_structure(main_client, loaded_db):
     pid = _project_id_for(loaded_db, "Widget Project")
     resp = main_client.get(f"/api/project-details?project_id={pid}")
