@@ -54,14 +54,44 @@
             margin: 0.1rem 0;
         }
         #people-table .tabulator-tableholder { padding-bottom: 17px; }
+        #spending-summary-section { display: none; margin-top: 1.25rem; }
+        #spending-summary-table {
+            width: 100%;
+            max-width: 780px;
+            border-collapse: collapse;
+            background: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        #spending-summary-table th,
+        #spending-summary-table td {
+            padding: 6px 10px;
+            border-bottom: 1px solid #f0f0f0;
+            text-align: left;
+            font-size: 0.92em;
+        }
+        #spending-summary-table th {
+            background: #f5f7fa;
+            color: #495057;
+            font-weight: 600;
+        }
+        #spending-summary-table td:last-child {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        #spending-summary-table tr.budget-line-row td {
+            background: #eef3fb;
+        }
         #spending-section { display: none; margin-top: 1.5rem; }
         .spending-chart-wrap {
             background: #fff;
             border: 1px solid #dee2e6;
             border-radius: 4px;
-            padding: 1rem;
-            max-width: 900px;
-            margin-bottom: 1rem;
+            padding: 0.6rem;
+            max-width: 520px;
+            height: 190px;
+            margin-bottom: 0.7rem;
         }
         #bl-spending-section { display: none; margin-top: 1.5rem; }
         #history-section { display: none; margin-top: 1.5rem; }
@@ -95,6 +125,16 @@
             border-bottom: 1px solid #f0f0f0;
         }
         .history-group .arrow { color: #6c757d; }
+        #fte-table .tabulator-data-tree-control,
+        #people-table .tabulator-data-tree-control {
+            display: none !important;
+        }
+        .tabulator-tree-level-1 {
+            background-color: #eef3fb !important;
+        }
+        .tabulator-tree-level-1 .tabulator-cell {
+            background-color: #eef3fb !important;
+        }
     </style>
 </head>
 <body>
@@ -117,6 +157,7 @@
     <div id="fte-section">
         <h2>Total FTE by Month</h2>
         <div class="toolbar">
+            <button id="fte-tree-btn">Expand budget lines</button>
             <div class="col-picker">
                 <button id="fte-col-btn">Columns &#9660;</button>
                 <div id="fte-col-dropdown" class="col-dropdown"></div>
@@ -128,6 +169,7 @@
     <div id="people-section">
         <h2>Individual Effort by Month</h2>
         <div class="toolbar">
+            <button id="people-tree-btn">Expand budget lines</button>
             <div class="col-picker">
                 <button id="people-col-btn">Columns &#9660;</button>
                 <div id="people-col-dropdown" class="col-dropdown"></div>
@@ -137,6 +179,20 @@
     </div>
 
     <div id="spending-section">
+        <div id="spending-summary-section">
+            <h2>Projected Balances</h2>
+            <table id="spending-summary-table">
+                <thead>
+                    <tr>
+                        <th>Project/BudgetLine</th>
+                        <th>End Date</th>
+                        <th>Projected Balance</th>
+                    </tr>
+                </thead>
+                <tbody id="spending-summary-body"></tbody>
+            </table>
+        </div>
+
         <h2>Remaining Personnel Budget</h2>
         <div class="spending-chart-wrap">
             <canvas id="spending-chart"></canvas>
@@ -160,6 +216,11 @@
         let spendingChart = null;
         let blCharts = [];
         let allProjects = [];
+        let fteTreeExpanded = false;
+        let peopleTreeExpanded = false;
+        let currentMonths = [];
+        let currentFteRows = [];
+        let currentPeopleRows = [];
 
         function fteFormatter(cell) {
             const v = cell.getValue();
@@ -205,8 +266,8 @@
                 lbl.appendChild(document.createTextNode("\u00a0" + col.getDefinition().title));
                 dropdown.appendChild(lbl);
             });
-            btn.addEventListener("click", e => { e.stopPropagation(); dropdown.classList.toggle("open"); });
-            dropdown.addEventListener("click", e => e.stopPropagation());
+            btn.onclick = e => { e.stopPropagation(); dropdown.classList.toggle("open"); };
+            dropdown.onclick = e => e.stopPropagation();
         }
 
         function showProjectInfo(info) {
@@ -347,6 +408,7 @@
                 },
                 options: {
                     responsive: true,
+                    maintainAspectRatio: false,
                     plugins: {
                         legend: { display: false },
                         tooltip: {
@@ -365,6 +427,64 @@
                     },
                 },
             });
+        }
+
+        function formatCurrency(value) {
+            if (value == null || !Number.isFinite(value)) return "";
+            return "$" + value.toLocaleString(undefined, {maximumFractionDigits: 2});
+        }
+
+        function projectedBalance(analysis) {
+            if (!analysis || analysis.length === 0) return null;
+            const last = analysis[analysis.length - 1];
+            return Number.isFinite(last.remaining) ? last.remaining : null;
+        }
+
+        function showSpendingSummary(projectInfo, projectSpending, blSpending) {
+            const section = document.getElementById("spending-summary-section");
+            const body = document.getElementById("spending-summary-body");
+            body.innerHTML = "";
+
+            const rows = [];
+            const projectRemaining = projectedBalance(projectSpending);
+            if (projectInfo && projectRemaining != null) {
+                rows.push({
+                    name: projectInfo.name || "Project",
+                    end: projectInfo.end || "",
+                    remaining: projectRemaining,
+                });
+            }
+
+            (blSpending || []).forEach(bl => {
+                const remaining = projectedBalance(bl.spending_analysis);
+                if (remaining == null) return;
+                const name = bl.code ? `${bl.name} (${bl.code})` : bl.name;
+                rows.push({
+                    name,
+                    end: bl.end || "",
+                    remaining,
+                    isBudgetLine: true,
+                });
+            });
+
+            if (rows.length === 0) {
+                section.style.display = "none";
+                return;
+            }
+
+            rows.forEach(r => {
+                const tr = document.createElement("tr");
+                if (r.isBudgetLine) tr.className = "budget-line-row";
+                const c1 = document.createElement("td");
+                c1.textContent = r.name;
+                const c2 = document.createElement("td");
+                c2.textContent = r.end;
+                const c3 = document.createElement("td");
+                c3.textContent = formatCurrency(r.remaining);
+                tr.append(c1, c2, c3);
+                body.appendChild(tr);
+            });
+            section.style.display = "block";
         }
 
         function showSpendingChart(data) {
@@ -417,32 +537,76 @@
             });
         }
 
-        function initTables(months, fte_rows, people) {
-            document.getElementById("project-placeholder").style.display = "none";
-
+        function buildFteTable(expanded) {
             const fteColDefs = [
                 { title: "Label", field: "label", frozen: true },
-                ...months.map(fteColDef),
+                ...currentMonths.map(fteColDef),
             ];
+            if (fteTable) fteTable.destroy();
+            fteTable = new Tabulator("#fte-table", {
+                data: currentFteRows,
+                columns: fteColDefs,
+                layout: "fitDataFill",
+                dataTree: true,
+                dataTreeStartExpanded: expanded,
+            });
+            fteTable.on("tableBuilt", () => setupColPicker("fte-col-btn", "fte-col-dropdown", fteTable));
+        }
+
+        function buildPeopleTable(expanded) {
             const peopleColDefs = [
                 { title: "Name", field: "name", headerFilter: "input", frozen: true },
                 { title: "Group", field: "group", headerFilter: "input" },
-                ...months.map(pctColDef),
+                ...currentMonths.map(pctColDef),
             ];
-
-            fteTable = new Tabulator("#fte-table", {
-                data: fte_rows,
-                columns: fteColDefs,
-                layout: "fitDataFill",
-            });
+            if (peopleTable) peopleTable.destroy();
             peopleTable = new Tabulator("#people-table", {
-                data: people,
+                data: currentPeopleRows,
                 columns: peopleColDefs,
                 layout: "fitDataFill",
+                dataTree: true,
+                dataTreeStartExpanded: expanded,
             });
-
-            fteTable.on("tableBuilt", () => setupColPicker("fte-col-btn", "fte-col-dropdown", fteTable));
             peopleTable.on("tableBuilt", () => setupColPicker("people-col-btn", "people-col-dropdown", peopleTable));
+        }
+
+        function initTables(months, fte_rows, people) {
+            document.getElementById("project-placeholder").style.display = "none";
+            currentMonths = months;
+            currentFteRows = fte_rows;
+            currentPeopleRows = people;
+            buildFteTable(false);
+            buildPeopleTable(false);
+            resetTreeButtons();
+        }
+
+        function setTreeExpanded(table, expand) {
+            if (table === fteTable) buildFteTable(expand);
+            if (table === peopleTable) buildPeopleTable(expand);
+            return Promise.resolve();
+        }
+
+        function hasTreeRows(rows) {
+            return rows.some(row => Array.isArray(row._children) && row._children.length > 0);
+        }
+
+        function resetTreeButtons() {
+            fteTreeExpanded = false;
+            peopleTreeExpanded = false;
+
+            const fteBtn = document.getElementById("fte-tree-btn");
+            const peopleBtn = document.getElementById("people-tree-btn");
+
+            if (currentFteRows.length > 0) {
+                const fteHasChildren = hasTreeRows(currentFteRows);
+                fteBtn.textContent = "Expand budget lines";
+                fteBtn.disabled = !fteHasChildren;
+            }
+            if (currentPeopleRows.length > 0) {
+                const peopleHasChildren = hasTreeRows(currentPeopleRows);
+                peopleBtn.textContent = "Expand budget lines";
+                peopleBtn.disabled = !peopleHasChildren;
+            }
         }
 
         function showError(msg) {
@@ -489,13 +653,18 @@
                 })
                 .then(({ months, fte_rows, people, project_info, spending_analysis, budget_line_spending }) => {
                     showProjectInfo(project_info);
+                    showSpendingSummary(project_info, spending_analysis, budget_line_spending);
                     showSpendingChart(spending_analysis);
                     showBudgetLineSpending(budget_line_spending);
                     if (fteTable === null) {
                         initTables(months, fte_rows, people);
                     } else {
-                        fteTable.setData(fte_rows);
-                        peopleTable.setData(people);
+                        currentMonths = months;
+                        currentFteRows = fte_rows;
+                        currentPeopleRows = people;
+                        buildFteTable(false);
+                        buildPeopleTable(false);
+                        resetTreeButtons();
                     }
                 })
                 .catch(err => showError(err.message));
@@ -531,6 +700,24 @@
             const projectId = findProjectIdByInput(e.target.value);
             if (!projectId) return;
             loadProject(projectId);
+        });
+
+        document.getElementById("fte-tree-btn").addEventListener("click", () => {
+            if (!fteTable) return;
+            fteTreeExpanded = !fteTreeExpanded;
+            setTreeExpanded(fteTable, fteTreeExpanded).then(() => {
+                document.getElementById("fte-tree-btn").textContent = fteTreeExpanded
+                    ? "Collapse budget lines" : "Expand budget lines";
+            });
+        });
+
+        document.getElementById("people-tree-btn").addEventListener("click", () => {
+            if (!peopleTable) return;
+            peopleTreeExpanded = !peopleTreeExpanded;
+            setTreeExpanded(peopleTable, peopleTreeExpanded).then(() => {
+                document.getElementById("people-tree-btn").textContent = peopleTreeExpanded
+                    ? "Collapse budget lines" : "Expand budget lines";
+            });
         });
 
         document.addEventListener("click", () => {

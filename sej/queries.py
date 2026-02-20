@@ -1759,6 +1759,19 @@ def get_project_details(db_path: str | Path, project_id: int) -> dict:
         ORDER BY e.year, e.month
     """, (project_id,)).fetchall()
 
+    internal_fte_by_bl_rows = conn.execute("""
+        SELECT bl.id AS budget_line_id, e.year, e.month,
+               SUM(e.percentage) / 100.0 AS total_fte
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN employees emp ON emp.id = al.employee_id
+        JOIN groups g ON g.id = emp.group_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE bl.project_id = ? AND g.is_internal = 1
+        GROUP BY bl.id, e.year, e.month
+        ORDER BY bl.id, e.year, e.month
+    """, (project_id,)).fetchall()
+
     external_fte_rows = conn.execute("""
         SELECT e.year, e.month, SUM(e.percentage) / 100.0 AS total_fte
         FROM efforts e
@@ -1769,6 +1782,19 @@ def get_project_details(db_path: str | Path, project_id: int) -> dict:
         WHERE bl.project_id = ? AND g.is_internal = 0
         GROUP BY e.year, e.month
         ORDER BY e.year, e.month
+    """, (project_id,)).fetchall()
+
+    external_fte_by_bl_rows = conn.execute("""
+        SELECT bl.id AS budget_line_id, e.year, e.month,
+               SUM(e.percentage) / 100.0 AS total_fte
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN employees emp ON emp.id = al.employee_id
+        JOIN groups g ON g.id = emp.group_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE bl.project_id = ? AND g.is_internal = 0
+        GROUP BY bl.id, e.year, e.month
+        ORDER BY bl.id, e.year, e.month
     """, (project_id,)).fetchall()
 
     person_rows = conn.execute("""
@@ -1786,6 +1812,24 @@ def get_project_details(db_path: str | Path, project_id: int) -> dict:
         WHERE bl.project_id = ?
         GROUP BY emp.id, e.year, e.month
         ORDER BY emp.name, e.year, e.month
+    """, (project_id,)).fetchall()
+
+    person_bl_rows = conn.execute("""
+        SELECT
+            emp.name AS employee_name,
+            g.name AS group_name,
+            bl.id AS budget_line_id,
+            e.year,
+            e.month,
+            SUM(e.percentage) AS total_pct
+        FROM efforts e
+        JOIN allocation_lines al ON al.id = e.allocation_line_id
+        JOIN employees emp ON emp.id = al.employee_id
+        JOIN groups g ON g.id = emp.group_id
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        WHERE bl.project_id = ?
+        GROUP BY emp.id, bl.id, e.year, e.month
+        ORDER BY emp.name, bl.id, e.year, e.month
     """, (project_id,)).fetchall()
 
     # Per-budget-line spending analysis
@@ -1816,12 +1860,20 @@ def get_project_details(db_path: str | Path, project_id: int) -> dict:
             )
         budget_line_spending.append({
             "name": bl["bl_name"],
+            "code": bl["budget_line_code"],
+            "end": _period(bl["end_year"], bl["end_month"]),
             "spending_analysis": bl_analysis,
         })
 
     conn.close()
 
     month_labels = [_month_label(y, m) for y, m in months]
+    month_set = set(month_labels)
+
+    bl_meta_by_id: dict[int, dict] = {
+        bl["id"]: {"code": bl["budget_line_code"], "name": bl["bl_name"]}
+        for bl in bl_rows
+    }
 
     internal_fte_data: dict[str, float] = {}
     for r in internal_fte_rows:
@@ -1835,11 +1887,48 @@ def get_project_details(db_path: str | Path, project_id: int) -> dict:
     for label in month_labels:
         internal_row[label] = internal_fte_data.get(label, 0.0)
 
+    internal_fte_children: dict[int, dict[str, float]] = {}
+    for r in internal_fte_by_bl_rows:
+        month_label = _month_label(r["year"], r["month"])
+        if month_label not in month_set:
+            continue
+        bl_id = r["budget_line_id"]
+        internal_fte_children.setdefault(bl_id, {})[month_label] = round(r["total_fte"], 2)
+    if len(internal_fte_children) > 1:
+        internal_row["_children"] = []
+        for bl_id in sorted(internal_fte_children.keys()):
+            meta = bl_meta_by_id.get(bl_id, {})
+            child_label = meta.get("name") or meta.get("code") or str(bl_id)
+            if meta.get("code"):
+                child_label = f"{child_label} ({meta['code']})"
+            child_row: dict = {"label": child_label}
+            for label in month_labels:
+                child_row[label] = internal_fte_children[bl_id].get(label, 0.0)
+            internal_row["_children"].append(child_row)
+
     fte_result: list[dict] = [internal_row]
     if external_fte_data:
         external_row: dict = {"label": "External FTE"}
         for label in month_labels:
             external_row[label] = external_fte_data.get(label, 0.0)
+        external_fte_children: dict[int, dict[str, float]] = {}
+        for r in external_fte_by_bl_rows:
+            month_label = _month_label(r["year"], r["month"])
+            if month_label not in month_set:
+                continue
+            bl_id = r["budget_line_id"]
+            external_fte_children.setdefault(bl_id, {})[month_label] = round(r["total_fte"], 2)
+        if len(external_fte_children) > 1:
+            external_row["_children"] = []
+            for bl_id in sorted(external_fte_children.keys()):
+                meta = bl_meta_by_id.get(bl_id, {})
+                child_label = meta.get("name") or meta.get("code") or str(bl_id)
+                if meta.get("code"):
+                    child_label = f"{child_label} ({meta['code']})"
+                child_row: dict = {"label": child_label}
+                for label in month_labels:
+                    child_row[label] = external_fte_children[bl_id].get(label, 0.0)
+                external_row["_children"].append(child_row)
         fte_result.append(external_row)
 
     person_data: dict[str, dict[str, float]] = {}
@@ -1851,10 +1940,31 @@ def get_project_details(db_path: str | Path, project_id: int) -> dict:
         person_group[name] = r["group_name"]
 
     people_result: list[dict] = []
+    person_bl_data: dict[str, dict[int, dict[str, float]]] = {}
+    for r in person_bl_rows:
+        month_label = _month_label(r["year"], r["month"])
+        if month_label not in month_set:
+            continue
+        name = r["employee_name"]
+        bl_id = r["budget_line_id"]
+        person_bl_data.setdefault(name, {}).setdefault(bl_id, {})[month_label] = round(r["total_pct"], 1)
+
     for name in sorted(person_data.keys()):
         row: dict = {"name": name, "group": person_group[name]}
         for label in month_labels:
             row[label] = round(person_data[name].get(label, 0.0), 1)
+        bl_children = person_bl_data.get(name, {})
+        if len(bl_children) > 0:
+            row["_children"] = []
+            for bl_id in sorted(bl_children.keys()):
+                meta = bl_meta_by_id.get(bl_id, {})
+                child_name = meta.get("name") or meta.get("code") or str(bl_id)
+                if meta.get("code"):
+                    child_name = f"{child_name} ({meta['code']})"
+                child_row = {"name": child_name, "group": ""}
+                for label in month_labels:
+                    child_row[label] = bl_children[bl_id].get(label, 0.0)
+                row["_children"].append(child_row)
         people_result.append(row)
 
     return {

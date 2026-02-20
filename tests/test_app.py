@@ -1858,6 +1858,54 @@ def test_api_project_details_person_group(main_client, loaded_db):
     assert jane["group"] == "Engineering"
 
 
+def test_api_project_details_children_for_multi_budget_line(tmp_path):
+    tsv = tmp_path / "project_multi_anon.tsv"
+    db = tmp_path / "project_multi_anon.db"
+    _write_tsv(tsv, [
+        ["Smith,Jane", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120001", "Widget Project",
+         "30.00%", "40.00%"],
+        ["", "Engineering", "25210", "49000", "511120",
+         "", "", "", "VRENG", "5120003", "Widget Project",
+         "20.00%", "10.00%"],
+    ])
+    load_tsv(tsv, db)
+
+    import sqlite3
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    widget_proj = conn.execute(
+        "SELECT id FROM projects WHERE name = 'Widget Project' LIMIT 1"
+    ).fetchone()["id"]
+    conn.execute(
+        "UPDATE budget_lines SET project_id = ? WHERE budget_line_code IN ('5120001', '5120003')",
+        (widget_proj,),
+    )
+    conn.commit()
+    conn.close()
+
+    app = create_app(db_path=db)
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        data = c.get(f"/api/project-details?project_id={widget_proj}").json
+
+    internal = next(r for r in data["fte_rows"] if r["label"] == "Internal FTE")
+    assert "_children" in internal
+    assert len(internal["_children"]) == 2
+    assert abs(internal["July 2025"] - 0.50) < 0.01
+    for child in internal["_children"]:
+        assert "July 2025" in child
+        assert "August 2025" in child
+
+    jane = next(r for r in data["people"] if r["name"] == "Smith,Jane")
+    assert "_children" in jane
+    assert len(jane["_children"]) == 2
+    assert abs(jane["July 2025"] - 50.0) < 0.1
+    for child in jane["_children"]:
+        assert "July 2025" in child
+        assert "August 2025" in child
+
+
 def test_api_add_employee_forbidden_on_main(client):
     resp = client.post("/api/employee", json={
         "first_name": "Jane", "last_name": "Smith", "group_name": "Engineering",
