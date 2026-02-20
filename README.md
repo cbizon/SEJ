@@ -82,14 +82,35 @@ Each employee record stores:
 
 Employee salary and dates can be updated from the Add/Edit project dialog area or via the employee API on a branch.
 
-## Projects
+## Projects and Budget Lines
+
+The system uses a two-level hierarchy for organizing financial data:
+
+### Budget Lines
+
+**Budget lines** are the granular financial units that come from the accounting system. Each budget line represents a specific combination of:
+
+- A unique budget line code (e.g., from the `Project Id` column in the input TSV)
+- Accounting codes (fund code, source, account, cost codes, program code)
+- Optional start/end dates
+- Optional personnel budget amount
+
+Budget lines are what employees actually charge their time against. Each allocation line in the database connects an employee to a specific budget line with specific accounting codes.
+
+### Projects
+
+**Projects** are an aggregation layer that groups related budget lines together. A project can contain one or more budget lines, allowing you to see the total effort and spending across all funding sources for a logical project.
 
 Each project record stores optional metadata:
 
 - **Start / End** — the project's active date range (month and year)
 - **Local PI** — the primary investigator from within the organization
 - **Admin Group** — the group responsible for administering the project
-- **Personnel Budget** — total personnel spending budget (dollars); used to compute a remaining-budget chart in the Project Details report
+- **Personnel Budget** — total personnel spending budget across all budget lines (dollars); used to compute a remaining-budget chart in the Project Details report
+
+**Initial Import:** When data is first loaded from a TSV file, the system creates a 1:1 mapping — one project per budget line. Each project is initially named after its budget line.
+
+**Grouping Budget Lines:** After import, you can use the **Add/Edit project** dialog (on a branch) to group multiple related budget lines under a single project. For example, if you have budget lines "ProjectA-Year1", "ProjectA-Year2", and "ProjectA-Supplement", you can create or update a project called "Project A" and assign all three budget lines to it. This allows reports and budgets to roll up across all funding sources for that logical project.
 
 ## Reports
 

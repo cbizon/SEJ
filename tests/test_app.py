@@ -1570,15 +1570,15 @@ def test_api_group_details_ops_person_np(main_client):
 
 def test_api_group_details_projects(main_client):
     data = main_client.get("/api/group-details?group=Engineering").json
-    codes = [r["budget_line_code"] for r in data["projects"]]
-    assert "5120001" in codes
-    assert "5120002" in codes
+    names = [r["project_name"] for r in data["projects"]]
+    assert "Widget Project" in names
+    assert "Gadget Project" in names
 
 
 def test_api_group_details_project_effort(main_client):
-    # Smith,Jane: 50% on 5120001 in July — that's the only Engineering member, so total = 50%
+    # Smith,Jane: 50% on Widget Project in July — that's the only Engineering member, so total = 50%
     data = main_client.get("/api/group-details?group=Engineering").json
-    proj = next(r for r in data["projects"] if r["budget_line_code"] == "5120001")
+    proj = next(r for r in data["projects"] if r["project_name"] == "Widget Project")
     assert abs(proj["July 2025"] - 50.0) < 0.1
 
 

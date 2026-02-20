@@ -213,7 +213,7 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
         people:   list of {name, <month>: np_pct, ...} dicts, sorted by name, with a
                   trailing Total row showing the group-level Non-Project percentage
         projects: list of {project_code, project_name, <month>: total_effort, ...} dicts,
-                  sorted by project_code
+                  sorted by project_name. Aggregates all budget lines within each project.
     """
     conn = get_connection(db_path)
     create_schema(conn)
@@ -239,8 +239,6 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
 
     project_rows = conn.execute("""
         SELECT
-            bl.budget_line_code,
-            COALESCE(bl.display_name, bl.name) AS budget_line_name,
             p.id AS project_id,
             p.name AS project_name,
             e.year,
@@ -253,8 +251,8 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
         JOIN budget_lines bl ON bl.id = al.budget_line_id
         JOIN projects p ON p.id = bl.project_id
         WHERE g.name = ?
-        GROUP BY bl.id, e.year, e.month
-        ORDER BY bl.budget_line_code, e.year, e.month
+        GROUP BY p.id, e.year, e.month
+        ORDER BY p.name, e.year, e.month
     """, (group_name,)).fetchall()
 
     group_total_rows = conn.execute("""
@@ -303,29 +301,26 @@ def get_group_details(db_path: str | Path, group_name: str) -> dict:
         total_row.setdefault(label, 0.0)
     people_result.append(total_row)
 
-    # Per-budget-line total effort table
-    project_data: dict[str, dict[str, float]] = {}
-    project_info: dict[str, dict] = {}
+    # Per-project total effort table
+    project_data: dict[int, dict[str, float]] = {}
+    project_info: dict[int, dict] = {}
     for r in project_rows:
-        code = r["budget_line_code"]
+        proj_id = r["project_id"]
         label = _month_label(r["year"], r["month"])
-        project_data.setdefault(code, {})[label] = r["total_effort"]
-        project_info[code] = {
-            "budget_line_name": r["budget_line_name"] or "",
-            "project_id": r["project_id"],
+        # Sum efforts if multiple months map to same project (already summed in SQL)
+        project_data.setdefault(proj_id, {})[label] = r["total_effort"]
+        project_info[proj_id] = {
             "project_name": r["project_name"] or "",
         }
 
     projects_result: list[dict] = []
-    for code in sorted(project_data.keys()):
+    # Sort by project name for display
+    for proj_id in sorted(project_info.keys(), key=lambda x: project_info[x]["project_name"]):
         row = {
-            "budget_line_code": code,
-            "budget_line_name": project_info[code]["budget_line_name"],
-            "project_id": project_info[code]["project_id"],
-            "project_name": project_info[code]["project_name"],
+            "project_name": project_info[proj_id]["project_name"],
         }
         for label in month_labels:
-            row[label] = round(project_data[code].get(label, 0.0), 1)
+            row[label] = round(project_data[proj_id].get(label, 0.0), 1)
         projects_result.append(row)
 
     return {"months": month_labels, "people": people_result, "projects": projects_result}
