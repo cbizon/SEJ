@@ -32,6 +32,8 @@
             background-color: #e9ecef !important;
         }
         .tabulator-calcs-bottom { border-top: 2px solid #495057 !important; }
+        .tabulator-tree-level-1 { background-color: #eef3fb !important; }
+        .tabulator-tree-level-1 .tabulator-cell { background-color: #eef3fb !important; }
     </style>
 </head>
 <body>
@@ -129,8 +131,7 @@
                 })),
             ];
             const projectColDefs = [
-                { title: "Project", field: "project_code", headerFilter: "input" },
-                { title: "Name", field: "project_name", headerFilter: "input" },
+                { title: "Project", field: "project_name", headerFilter: "input" },
                 ...months.map(monthColDef),
             ];
 
@@ -144,6 +145,8 @@
                 data: projects,
                 columns: projectColDefs,
                 layout: "fitDataFill",
+                dataTree: true,
+                dataTreeStartExpanded: false,
             });
 
             peopleTable.on("tableBuilt", () => setupColPicker("people-col-btn", "people-col-dropdown", peopleTable));
