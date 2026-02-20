@@ -1742,6 +1742,20 @@ def test_api_project_details_structure(main_client, loaded_db):
     assert "budget_line_spending" in data
 
 
+def test_api_project_details_includes_budget_line_info(main_client, loaded_db):
+    pid = _project_id_for(loaded_db, "Widget Project")
+    data = main_client.get(f"/api/project-details?project_id={pid}").json
+    assert "project_info" in data
+    assert "budget_lines" in data["project_info"]
+    assert len(data["project_info"]["budget_lines"]) >= 1
+    bl = data["project_info"]["budget_lines"][0]
+    assert "code" in bl
+    assert "name" in bl
+    assert "start" in bl
+    assert "end" in bl
+    assert "personnel_budget" in bl
+
+
 def test_api_project_details_months(main_client, loaded_db):
     pid = _project_id_for(loaded_db, "Widget Project")
     data = main_client.get(f"/api/project-details?project_id={pid}").json

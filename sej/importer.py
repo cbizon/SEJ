@@ -337,17 +337,160 @@ def load_tsv_as_branch(tsv_path: str | Path, main_db_path: str | Path,
     return main_db_path
 
 
+def augment_sample_data(db_path: str | Path) -> str | None:
+    """Enrich one project with full metadata and split its budget line into Y1/Y2.
+
+    Picks the non-sentinel project with the most distinct employees, sets
+    project dates/PI/admin group, splits the budget line into two year-halves,
+    and reassigns effort rows to the correct half.
+
+    Args:
+        db_path: Path to the SQLite database file.
+
+    Returns:
+        The name of the augmented project, or None if no candidate was found.
+    """
+    conn = get_connection(db_path)
+
+    # 1. Pick the non-sentinel project with the most distinct employees
+    candidate = conn.execute("""
+        SELECT bl.project_id, p.name, COUNT(DISTINCT al.employee_id) AS emp_count
+        FROM budget_lines bl
+        JOIN allocation_lines al ON al.budget_line_id = bl.id
+        JOIN projects p ON p.id = bl.project_id
+        WHERE p.is_nonproject = 0
+        GROUP BY bl.project_id
+        ORDER BY emp_count DESC
+        LIMIT 1
+    """).fetchone()
+    if candidate is None:
+        conn.close()
+        return None
+    project_id = candidate["project_id"]
+    project_name = candidate["name"]
+
+    # Pick an employee on this project to be PI
+    pi_row = conn.execute("""
+        SELECT al.employee_id, e.group_id
+        FROM allocation_lines al
+        JOIN budget_lines bl ON bl.id = al.budget_line_id
+        JOIN employees e ON e.id = al.employee_id
+        WHERE bl.project_id = ?
+        LIMIT 1
+    """, (project_id,)).fetchone()
+    pi_id = pi_row["employee_id"]
+    admin_group_id = pi_row["group_id"]
+
+    # 2. Set project metadata
+    conn.execute("""
+        UPDATE projects
+        SET start_year = 2025, start_month = 7,
+            end_year = 2026, end_month = 6,
+            local_pi_id = ?, admin_group_id = ?
+        WHERE id = ?
+    """, (pi_id, admin_group_id, project_id))
+
+    # 3. Split the budget line into Y1 and Y2
+    # Get the first budget line for this project
+    bl = conn.execute("""
+        SELECT id, budget_line_code, name, display_name
+        FROM budget_lines WHERE project_id = ?
+        LIMIT 1
+    """, (project_id,)).fetchone()
+    y1_bl_id = bl["id"]
+    orig_code = bl["budget_line_code"]
+    orig_display = bl["display_name"] or bl["name"] or orig_code
+
+    # Update existing budget line to be Y1
+    conn.execute("""
+        UPDATE budget_lines
+        SET start_year = 2025, start_month = 7,
+            end_year = 2026, end_month = 2,
+            display_name = ?
+        WHERE id = ?
+    """, (f"{orig_display} — Y1", y1_bl_id))
+
+    # Create Y2 budget line
+    y2_code = f"{orig_code}-Y2"
+    cur = conn.execute("""
+        INSERT INTO budget_lines
+            (project_id, budget_line_code, name, display_name,
+             start_year, start_month, end_year, end_month)
+        VALUES (?, ?, ?, ?, 2026, 3, 2026, 6)
+    """, (project_id, y2_code, bl["name"], f"{orig_display} — Y2"))
+    y2_bl_id = cur.lastrowid
+
+    # 4. Reassign effort to the correct budget line
+    # For each allocation line on Y1, create a duplicate pointing to Y2
+    # and move March 2026+ efforts to the new line
+    alloc_lines = conn.execute("""
+        SELECT id, employee_id, fund_code, source, account,
+               cost_code_1, cost_code_2, cost_code_3, program_code
+        FROM allocation_lines WHERE budget_line_id = ?
+    """, (y1_bl_id,)).fetchall()
+
+    for al in alloc_lines:
+        # Create duplicate allocation line for Y2
+        cur = conn.execute("""
+            INSERT INTO allocation_lines
+                (employee_id, budget_line_id, fund_code, source, account,
+                 cost_code_1, cost_code_2, cost_code_3, program_code)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (al["employee_id"], y2_bl_id, al["fund_code"], al["source"],
+              al["account"], al["cost_code_1"], al["cost_code_2"],
+              al["cost_code_3"], al["program_code"]))
+        y2_al_id = cur.lastrowid
+
+        # Move efforts for months March 2026+ from old allocation line to new one
+        conn.execute("""
+            UPDATE efforts
+            SET allocation_line_id = ?
+            WHERE allocation_line_id = ?
+              AND (year > 2026 OR (year = 2026 AND month >= 3))
+        """, (y2_al_id, al["id"]))
+
+    # 5. Set personnel budgets based on effort data
+    for bl_id, label in [(y1_bl_id, "Y1"), (y2_bl_id, "Y2")]:
+        total_cost = conn.execute("""
+            SELECT COALESCE(SUM(e.percentage / 100.0 * emp.salary / 12.0), 0) AS cost
+            FROM efforts e
+            JOIN allocation_lines al ON al.id = e.allocation_line_id
+            JOIN employees emp ON emp.id = al.employee_id
+            WHERE al.budget_line_id = ?
+        """, (bl_id,)).fetchone()["cost"]
+        # Add ~15% headroom so spending chart looks realistic
+        budget = round(total_cost * 1.15, 2)
+        conn.execute(
+            "UPDATE budget_lines SET personnel_budget = ? WHERE id = ?",
+            (budget, bl_id),
+        )
+
+    conn.commit()
+    conn.close()
+    return project_name
+
+
 def main():
-    """CLI entry point: ``sej-load TSV_PATH [DB_PATH]``."""
+    """CLI entry point: ``sej-load TSV_PATH [DB_PATH] [--augment]``."""
     import sys
 
-    if len(sys.argv) < 2 or len(sys.argv) > 3:
-        sys.exit("Usage: sej-load TSV_PATH [DB_PATH]")
-    tsv_path = Path(sys.argv[1])
-    db_path = Path(sys.argv[2]) if len(sys.argv) == 3 else Path("data/sej.db")
+    args = [a for a in sys.argv[1:] if a != "--augment"]
+    do_augment = "--augment" in sys.argv
+
+    if len(args) < 1 or len(args) > 2:
+        sys.exit("Usage: sej-load TSV_PATH [DB_PATH] [--augment]")
+    tsv_path = Path(args[0])
+    db_path = Path(args[1]) if len(args) == 2 else Path("data/sej.db")
     result = load_tsv_as_branch(tsv_path, db_path)
     if result == db_path:
         print(f"Loaded {tsv_path} → {db_path}")
     else:
         print(f"Loaded {tsv_path} → branch at {result}")
         print(f"Run 'sej-branch merge' to apply changes to main.")
+
+    if do_augment:
+        project_name = augment_sample_data(db_path)
+        if project_name:
+            print(f"Augmented project '{project_name}' with metadata + Y1/Y2 budget line split.")
+        else:
+            print("No candidate project found for augmentation.")

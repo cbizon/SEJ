@@ -1736,6 +1736,7 @@ def get_project_details(db_path: str | Path, project_id: int) -> dict:
             "local_pi_name": proj_row["local_pi_name"],
             "personnel_budget": total_budget,
             "admin_group_name": proj_row["admin_group_name"],
+            "budget_lines": [],
         }
         end_y = proj_row["end_year"]
         end_m = proj_row["end_month"]
@@ -1789,7 +1790,7 @@ def get_project_details(db_path: str | Path, project_id: int) -> dict:
 
     # Per-budget-line spending analysis
     bl_rows = conn.execute("""
-        SELECT id, COALESCE(display_name, name) AS bl_name,
+        SELECT id, budget_line_code, COALESCE(display_name, name) AS bl_name,
                personnel_budget, start_year, start_month, end_year, end_month
         FROM budget_lines WHERE project_id = ?
         ORDER BY COALESCE(display_name, name)
@@ -1797,6 +1798,14 @@ def get_project_details(db_path: str | Path, project_id: int) -> dict:
 
     budget_line_spending = []
     for bl in bl_rows:
+        if project_info is not None:
+            project_info["budget_lines"].append({
+                "code": bl["budget_line_code"],
+                "name": bl["bl_name"],
+                "start": _period(bl["start_year"], bl["start_month"]),
+                "end": _period(bl["end_year"], bl["end_month"]),
+                "personnel_budget": bl["personnel_budget"],
+            })
         bl_analysis = None
         if (bl["personnel_budget"] is not None
                 and bl["end_year"] is not None and bl["end_month"] is not None):

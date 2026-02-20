@@ -45,6 +45,13 @@
         }
         #project-info dt { font-weight: 600; color: #495057; }
         #project-info dd { margin: 0; }
+        #project-info .budget-line-list {
+            margin: 0;
+            padding-left: 1.1rem;
+        }
+        #project-info .budget-line-list li {
+            margin: 0.1rem 0;
+        }
         #people-table .tabulator-tableholder { padding-bottom: 17px; }
         #spending-section { display: none; margin-top: 1.5rem; }
         .spending-chart-wrap {
@@ -227,6 +234,31 @@
                 dl.appendChild(dt);
                 dl.appendChild(dd);
             });
+
+            const budgetLines = Array.isArray(info.budget_lines) ? info.budget_lines : [];
+            if (budgetLines.length > 0) {
+                const dt = document.createElement("dt");
+                dt.textContent = budgetLines.length === 1 ? "Budget Line" : "Budget Lines";
+                const dd = document.createElement("dd");
+                const ul = document.createElement("ul");
+                ul.className = "budget-line-list";
+
+                budgetLines.forEach(bl => {
+                    const li = document.createElement("li");
+                    const name = bl.name || bl.code || "(unnamed)";
+                    const code = bl.code ? ` (${bl.code})` : "";
+                    const parts = [];
+                    if (bl.start || bl.end) parts.push(`${bl.start || "?"} to ${bl.end || "?"}`);
+                    if (bl.personnel_budget != null) parts.push("$" + bl.personnel_budget.toLocaleString());
+                    const meta = parts.length > 0 ? ` — ${parts.join(" · ")}` : "";
+                    li.textContent = `${name}${code}${meta}`;
+                    ul.appendChild(li);
+                });
+
+                dd.appendChild(ul);
+                dl.appendChild(dt);
+                dl.appendChild(dd);
+            }
             panel.style.display = "block";
         }
 
