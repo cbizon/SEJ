@@ -13,7 +13,8 @@
         nav a:hover { text-decoration: underline; }
         .controls { margin-bottom: 1rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .controls label { font-weight: 600; }
-        .controls select { padding: 4px 8px; font-size: 1em; }
+        .controls input[type="text"] { padding: 4px 8px; font-size: 1em; }
+        #project-picker { min-width: 360px; }
         h2 { margin: 1.25rem 0 0.4rem; font-size: 1.05em; color: #343a40; }
         h3 { margin: 1rem 0 0.3rem; font-size: 0.95em; color: #495057; }
         .toolbar { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
@@ -101,10 +102,9 @@
     <nav><a href="/reports">&larr; Reports</a></nav>
 
     <div class="controls">
-        <label for="project-select">Project:</label>
-        <select id="project-select">
-            <option value="">Loading&hellip;</option>
-        </select>
+        <label for="project-picker">Project:</label>
+        <input id="project-picker" type="text" list="project-options" placeholder="Start typing project name...">
+        <datalist id="project-options"></datalist>
     </div>
 
     <div id="error"></div>
@@ -159,6 +159,7 @@
         let peopleTable = null;
         let spendingChart = null;
         let blCharts = [];
+        let allProjects = [];
 
         function fteFormatter(cell) {
             const v = cell.getValue();
@@ -450,6 +451,27 @@
             el.style.display = "";
         }
 
+        function renderProjectOptions() {
+            const list = document.getElementById("project-options");
+            list.innerHTML = "";
+            allProjects.forEach(p => {
+                const opt = document.createElement("option");
+                opt.value = p.name;
+                list.appendChild(opt);
+            });
+        }
+
+        function findProjectIdByInput(value) {
+            if (!value) return "";
+            const exact = allProjects.find(p => p.name === value);
+            if (exact) return exact.id;
+            const lower = value.trim().toLowerCase();
+            if (!lower) return "";
+            const partial = allProjects.filter(p => p.name.toLowerCase().includes(lower));
+            if (partial.length === 1) return partial[0].id;
+            return "";
+        }
+
         function loadProject(projectId) {
             document.getElementById("error").style.display = "none";
             if (!projectId) {
@@ -490,21 +512,26 @@
         fetch("/api/projects")
             .then(r => r.json())
             .then(projects => {
-                const sel = document.getElementById("project-select");
-                sel.innerHTML = '<option value="">-- select a project --</option>';
-                projects.forEach(p => {
-                    const opt = document.createElement("option");
-                    opt.value = p.id;
-                    opt.textContent = p.name;
-                    sel.appendChild(opt);
-                });
+                allProjects = projects;
+                renderProjectOptions();
                 if (projects.length === 1) {
-                    sel.value = projects[0].id;
+                    document.getElementById("project-picker").value = projects[0].name;
                     loadProject(projects[0].id);
                 }
             });
 
-        document.getElementById("project-select").addEventListener("change", e => loadProject(e.target.value));
+        document.getElementById("project-picker").addEventListener("input", e => {
+            const projectId = findProjectIdByInput(e.target.value);
+            if (!projectId) return;
+            loadProject(projectId);
+        });
+
+        document.getElementById("project-picker").addEventListener("keydown", e => {
+            if (e.key !== "Enter") return;
+            const projectId = findProjectIdByInput(e.target.value);
+            if (!projectId) return;
+            loadProject(projectId);
+        });
 
         document.addEventListener("click", () => {
             document.querySelectorAll(".col-dropdown").forEach(d => d.classList.remove("open"));
